@@ -163,6 +163,33 @@ describeIntegration("SupportRepository integration", () => {
     expect(updated.topicTitle).toBe("new title");
   });
 
+  it("updateThread with pinnedMessageId: null clears the column", async () => {
+    const user = await seedUser();
+    const thread = await repo.createThread(user.id, 99_003, "test thread");
+    const withPin = await repo.updateThread(thread.id, { pinnedMessageId: 42_000 });
+    expect(withPin.pinnedMessageId).toBe(42_000);
+
+    const cleared = await repo.updateThread(thread.id, { pinnedMessageId: null });
+    expect(cleared.pinnedMessageId).toBeNull();
+  });
+
+  it("updateThread with isClosed: false correctly writes false", async () => {
+    const user = await seedUser();
+    const thread = await repo.createThread(user.id, 99_004, "test thread");
+    await repo.updateThread(thread.id, { isClosed: true });
+
+    const reopened = await repo.updateThread(thread.id, { isClosed: false });
+    expect(reopened.isClosed).toBe(false);
+  });
+
+  it("updateThread with empty values object returns current row unchanged", async () => {
+    const user = await seedUser();
+    const thread = await repo.createThread(user.id, 99_005, "stable title");
+    const same = await repo.updateThread(thread.id, {});
+    expect(same.topicTitle).toBe("stable title");
+    expect(same.isClosed).toBe(false);
+  });
+
   it("service cards: set, get, delete", async () => {
     const user = await seedUser();
     const ticket = await repo.createTicket(user.id, "question");
@@ -194,6 +221,48 @@ describeIntegration("SupportRepository integration", () => {
     // Confirm no orphan rows.
     const result = await pool.query("select * from service_cards where ticket_id = $1", [ticket.id]);
     expect(result.rowCount).toBe(0);
+  });
+
+  it("setTicketStatus does not update a closed ticket", async () => {
+    const user = await seedUser();
+    const ticket = await repo.createTicket(user.id, "question");
+    await repo.closeTicket(ticket.id);
+    const result = await repo.setTicketStatus(ticket.id, "in_review");
+    expect(result).toBeNull();
+
+    // DB must still show closed.
+    const found = await repo.findTicketById(ticket.id);
+    expect(found?.status).toBe("closed");
+  });
+
+  it("setTicketStatus returns null on same-status update (no-op)", async () => {
+    const user = await seedUser();
+    const ticket = await repo.createTicket(user.id, "question");
+    // Ticket is already open — setting open again must return null.
+    const result = await repo.setTicketStatus(ticket.id, "open");
+    expect(result).toBeNull();
+    // DB status must be unchanged.
+    const found = await repo.findTicketById(ticket.id);
+    expect(found?.status).toBe("open");
+  });
+
+  it("clearServiceSetup removes service_topics but preserves service_cards", async () => {
+    const user = await seedUser();
+    const ticket = await repo.createTicket(user.id, "question");
+
+    await pool.query(
+      "insert into service_topics(kind, message_thread_id) values ('open_tickets', 99999) on conflict (kind) do update set message_thread_id = excluded.message_thread_id"
+    );
+    await repo.setServiceCard(ticket.id, "open_tickets", 88_001);
+
+    await repo.clearServiceSetup();
+
+    const topics = await pool.query("select * from service_topics");
+    expect(topics.rowCount).toBe(0);
+
+    // service_cards must survive — bot needs them to update/delete ticket cards later.
+    const cards = await pool.query("select * from service_cards where ticket_id = $1", [ticket.id]);
+    expect(cards.rowCount).toBe(1);
   });
 
   it("full ticket lifecycle: open → in_review → closed → reopen → close", async () => {

@@ -4,12 +4,20 @@ import { formatTicketCard, formatTopicTitle, formatUserCard, statusEmoji, suppor
 import { SupportRepository } from "./repository.js";
 import type { TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
 
-export function moderatorTicketKeyboard(ticket: TicketRecord, supportGroupId: number, thread: UserThreadRecord) {
-  const topicUrl = Markup.button.url("Открыть топик", supportTopicUrl(supportGroupId, thread.messageThreadId, thread.pinnedMessageId));
+export function moderatorTicketKeyboard(
+  ticket: TicketRecord,
+  supportGroupId: number,
+  thread: UserThreadRecord,
+  opts: { includeTopicUrl?: boolean } = {}
+) {
+  const { includeTopicUrl = true } = opts;
+  const topicUrlRow = includeTopicUrl
+    ? [[Markup.button.url("Открыть топик", supportTopicUrl(supportGroupId, thread.messageThreadId, thread.pinnedMessageId))]]
+    : [];
 
   if (ticket.status === "open") {
     return Markup.inlineKeyboard([
-      [topicUrl],
+      ...topicUrlRow,
       [
         Markup.button.callback(`${statusEmoji("in_review")} На рассмотрении`, `set_status:${ticket.id}:in_review`),
         Markup.button.callback(`${statusEmoji("closed")} Закрыть`, `close:${ticket.id}`)
@@ -20,7 +28,7 @@ export function moderatorTicketKeyboard(ticket: TicketRecord, supportGroupId: nu
 
   if (ticket.status === "in_review") {
     return Markup.inlineKeyboard([
-      [topicUrl],
+      ...topicUrlRow,
       [
         Markup.button.callback(`${statusEmoji("open")} Вернуть в открытые`, `set_status:${ticket.id}:open`),
         Markup.button.callback(`${statusEmoji("closed")} Закрыть`, `close:${ticket.id}`)
@@ -31,7 +39,7 @@ export function moderatorTicketKeyboard(ticket: TicketRecord, supportGroupId: nu
 
   // closed
   return Markup.inlineKeyboard([
-    [topicUrl],
+    ...topicUrlRow,
     [Markup.button.callback(`${statusEmoji("open")} Переоткрыть`, `reopen:${ticket.id}`)]
   ]);
 }
@@ -72,17 +80,29 @@ export async function refreshPinnedCard(
   const stats = await repo.statsForUser(user.id);
   const text = formatUserCard(user, ticket, stats);
 
+  const keyboard = moderatorTicketKeyboard(ticket, config.supportGroupId, thread, { includeTopicUrl: false });
+
   if (thread.pinnedMessageId) {
     try {
-      await bot.telegram.editMessageText(config.supportGroupId, thread.pinnedMessageId, undefined, text);
+      await bot.telegram.editMessageText(config.supportGroupId, thread.pinnedMessageId, undefined, text, {
+        ...keyboard
+      });
       return thread;
-    } catch {
-      // The pinned message may have been deleted manually; send and pin a fresh card below.
+    } catch (error) {
+      const description =
+        (error as { description?: string }).description ??
+        (error as { response?: { description?: string } }).response?.description ??
+        "";
+      if (description.includes("MESSAGE_NOT_MODIFIED")) {
+        return thread;
+      }
+      // Any other error (message deleted, not found, etc.) — send and pin a fresh card below.
     }
   }
 
   const sent = await bot.telegram.sendMessage(config.supportGroupId, text, {
-    message_thread_id: thread.messageThreadId
+    message_thread_id: thread.messageThreadId,
+    ...keyboard
   });
   await bot.telegram.pinChatMessage(config.supportGroupId, sent.message_id, {
     disable_notification: true

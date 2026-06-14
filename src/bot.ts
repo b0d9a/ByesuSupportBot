@@ -13,8 +13,21 @@ import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, U
 
 const RATE_LIMIT_MS = 1000;
 const RATE_LIMIT_NOTICE_MS = 10_000;
+const RATE_LIMIT_TTL_MS = 60_000;
 const lastMessageAt = new Map<number, number>();
 const lastNoticeAt = new Map<number, number>();
+
+function pruneRateLimitMaps(): void {
+  const cutoff = Date.now() - RATE_LIMIT_TTL_MS;
+  for (const [id, ts] of lastMessageAt) {
+    if (ts < cutoff) {
+      lastMessageAt.delete(id);
+      lastNoticeAt.delete(id);
+    }
+  }
+}
+
+setInterval(pruneRateLimitMaps, RATE_LIMIT_TTL_MS).unref();
 
 interface BotDeps {
   pool: pg.Pool;
@@ -94,7 +107,10 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
 
     if (!ticket) {
       const selectedCategory = await repo.getSelectedCategory(user.telegramUserId);
-      if (!selectedCategory) {
+      if (!selectedCategory || !isCategoryCode(selectedCategory)) {
+        if (selectedCategory) {
+          await repo.clearSelectedCategory(user.telegramUserId);
+        }
         await ctx.reply("Выберите тип обращения, затем отправьте первое сообщение.", categoryKeyboard());
         return;
       }
@@ -232,6 +248,17 @@ async function setupServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void
   await ctx.reply(["Настройка служебных топиков завершена.", created.length ? `Созданы:\n${created.join("\n")}` : null, existing.length ? `Уже были в БД:\n${existing.join("\n")}` : null].filter(Boolean).join("\n\n"));
 }
 
+async function resetServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void> {
+  if (!ctx.chat || ctx.chat.id !== deps.config.supportGroupId) {
+    await ctx.reply("Команду /setup_reset нужно выполнить в модераторской супергруппе.");
+    return;
+  }
+
+  const repo = new SupportRepository(deps.pool);
+  await repo.clearServiceSetup();
+  await setupServiceTopics(ctx, deps);
+}
+
 async function closeTicket(ctx: Context, deps: RuntimeDeps, ticketId: number): Promise<void> {
   const repo = new SupportRepository(deps.pool);
   const ticket = await repo.closeTicket(ticketId);
@@ -323,6 +350,15 @@ async function reopenTicket(ctx: Context, deps: RuntimeDeps, ticketId: number): 
 
 async function changeTicketCategory(ctx: Context, deps: RuntimeDeps, ticketId: number, category: string): Promise<void> {
   const repo = new SupportRepository(deps.pool);
+  const existing = await repo.findTicketById(ticketId);
+  if (!existing) {
+    await ctx.answerCbQuery("Обращение не найдено.");
+    return;
+  }
+  if (existing.status === "closed") {
+    await ctx.answerCbQuery("Закрытое обращение нельзя изменить.");
+    return;
+  }
   const ticket = await repo.updateTicketCategory(ticketId, category);
   if (!ticket) {
     await ctx.answerCbQuery("Обращение не найдено.");
@@ -340,7 +376,7 @@ async function changeTicketCategory(ctx: Context, deps: RuntimeDeps, ticketId: n
     const title = formatTopicTitle(ticket.publicCode, ticket.category, user, ticket.status);
     await editForumTopicTitle(deps.bot, deps.config, thread, title);
     thread = await repo.updateThread(thread.id, { title });
-    await refreshPinnedCard(deps.bot, repo, deps.config, user, ticket, thread);
+    thread = await refreshPinnedCard(deps.bot, repo, deps.config, user, ticket, thread);
     await refreshOpenServiceCard(deps.bot, repo, deps.config, user, ticket, thread);
     await ctx.editMessageText(formatTicketCard(user, ticket, "Активное обращение"), {
       ...moderatorTicketKeyboard(ticket, deps.config.supportGroupId, thread)
@@ -366,7 +402,7 @@ async function setTicketStatus(ctx: Context, deps: RuntimeDeps, ticketId: number
   const repo = new SupportRepository(deps.pool);
   const ticket = await repo.setTicketStatus(ticketId, newStatus);
   if (!ticket) {
-    await ctx.answerCbQuery("Обращение не найдено.");
+    await ctx.answerCbQuery("Статус уже актуален или обращение закрыто.");
     return;
   }
 
@@ -416,6 +452,7 @@ export function createBot(deps: BotDeps): Telegraf {
   });
 
   bot.command("setup", async (ctx) => setupServiceTopics(ctx, fullDeps));
+  bot.command("setup_reset", async (ctx) => resetServiceTopics(ctx, fullDeps));
 
   bot.action(/^category:(.+)$/, async (ctx) => {
     const data = callbackData(ctx);
@@ -483,9 +520,11 @@ export function createBot(deps: BotDeps): Telegraf {
       error,
       updateId: ctx.update.update_id
     });
-    ctx.reply("Произошла непредвиденная ошибка. Попробуйте ещё раз.").catch(() => {
-      // Reply may fail if the context is a callback query or the chat is unavailable.
-    });
+    if (ctx.callbackQuery) {
+      ctx.answerCbQuery("Произошла ошибка. Попробуйте ещё раз.").catch(() => {});
+    } else {
+      ctx.reply("Произошла непредвиденная ошибка. Попробуйте ещё раз.").catch(() => {});
+    }
   });
 
   return bot;

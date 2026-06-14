@@ -118,17 +118,31 @@ export class SupportRepository {
   }
 
   async updateThread(threadId: number, values: { title?: string; pinnedMessageId?: number | null; isClosed?: boolean }): Promise<UserThreadRecord> {
+    const setClauses: string[] = [];
+    const params: unknown[] = [threadId];
+
+    if ("title" in values) {
+      params.push(values.title ?? null);
+      setClauses.push(`topic_title = $${params.length}`);
+    }
+    if ("pinnedMessageId" in values) {
+      params.push(values.pinnedMessageId ?? null);
+      setClauses.push(`pinned_message_id = $${params.length}`);
+    }
+    if ("isClosed" in values) {
+      params.push(values.isClosed ?? null);
+      setClauses.push(`is_closed = $${params.length}`);
+    }
+
+    if (setClauses.length === 0) {
+      const current = await this.db.query("select * from user_threads where id = $1", [threadId]);
+      return mapThread(current.rows[0]);
+    }
+
+    setClauses.push("updated_at = now()");
     const result = await this.db.query(
-      `
-        update user_threads set
-          topic_title = coalesce($2, topic_title),
-          pinned_message_id = coalesce($3, pinned_message_id),
-          is_closed = coalesce($4, is_closed),
-          updated_at = now()
-        where id = $1
-        returning *
-      `,
-      [threadId, values.title ?? null, values.pinnedMessageId ?? null, values.isClosed ?? null]
+      `update user_threads set ${setClauses.join(", ")} where id = $1 returning *`,
+      params
     );
     return mapThread(result.rows[0]);
   }
@@ -174,7 +188,7 @@ export class SupportRepository {
 
   async setTicketStatus(ticketId: number, status: TicketStatus): Promise<TicketRecord | null> {
     const result = await this.db.query(
-      "update tickets set status = $2 where id = $1 returning *",
+      "update tickets set status = $2 where id = $1 and status in ('open', 'in_review') and status != $2 returning *",
       [ticketId, status]
     );
     return result.rows[0] ? mapTicket(result.rows[0]) : null;
@@ -221,6 +235,10 @@ export class SupportRepository {
       `,
       [kind, messageThreadId]
     );
+  }
+
+  async clearServiceSetup(): Promise<void> {
+    await this.db.query("delete from service_topics");
   }
 
   async getServiceTopic(kind: ServiceTopicKind): Promise<number | null> {
