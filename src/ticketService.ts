@@ -242,12 +242,12 @@ export async function ensureThreadAndTicket(
   }
 
   const ticket = await repo.createTicket(user.id, category);
-  const title = formatTopicTitle(ticket.publicCode, category, user, ticket.status);
+  await repo.clearSelectedCategory(user.telegramUserId);
 
+  const title = formatTopicTitle(ticket.publicCode, category, user, ticket.status);
   await editForumTopicTitle(bot, config, thread, title);
   thread = await repo.updateThread(thread.id, { title, isClosed: false });
   thread = await refreshPinnedCard(bot, repo, config, user, ticket, thread);
-  await repo.clearSelectedCategory(user.telegramUserId);
   await postOpenTicketCard(bot, repo, config, user, ticket, thread);
   return { ticket, thread };
 }

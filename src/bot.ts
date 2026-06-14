@@ -481,6 +481,16 @@ export function createBot(deps: BotDeps): Telegraf {
 
   bot.action(/^change_category:(\d+)$/, async (ctx) => {
     const ticketId = Number(callbackData(ctx)?.split(":")[1]);
+    const repo = new SupportRepository(deps.pool);
+    const ticket = await repo.findTicketById(ticketId);
+    if (!ticket) {
+      await ctx.answerCbQuery("Обращение не найдено.");
+      return;
+    }
+    if (ticket.status === "closed") {
+      await ctx.answerCbQuery("Закрытое обращение нельзя изменить.");
+      return;
+    }
     await ctx.answerCbQuery("Выберите новый тип.");
     await ctx.editMessageReplyMarkup(categoryChangeKeyboard(ticketId).reply_markup);
   });

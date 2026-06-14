@@ -235,6 +235,36 @@ describeIntegration("SupportRepository integration", () => {
     expect(found?.status).toBe("closed");
   });
 
+  it("statsForUser counts in_review ticket as open", async () => {
+    const user = await seedUser();
+    const ticket = await repo.createTicket(user.id, "question");
+    await repo.setTicketStatus(ticket.id, "in_review");
+
+    const stats = await repo.statsForUser(user.id);
+    expect(stats.openCount).toBe(1);
+    expect(stats.closedCount).toBe(0);
+  });
+
+  it("closeTicket works from in_review status", async () => {
+    const user = await seedUser();
+    const ticket = await repo.createTicket(user.id, "question");
+    await repo.setTicketStatus(ticket.id, "in_review");
+    const closed = await repo.closeTicket(ticket.id);
+    expect(closed?.status).toBe("closed");
+    expect(closed?.closedAt).not.toBeNull();
+    expect(await repo.getActiveTicket(user.id)).toBeNull();
+  });
+
+  it("reopenTicket returns null when ticket is already open", async () => {
+    const user = await seedUser();
+    const ticket = await repo.createTicket(user.id, "question");
+    const result = await repo.reopenTicket(ticket.id);
+    expect(result).toBeNull();
+    // Status must remain open.
+    const found = await repo.findTicketById(ticket.id);
+    expect(found?.status).toBe("open");
+  });
+
   it("setTicketStatus returns null on same-status update (no-op)", async () => {
     const user = await seedUser();
     const ticket = await repo.createTicket(user.id, "question");
