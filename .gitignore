@@ -5,6 +5,9 @@
 node_modules/
 dist/
 logs/
+tmp/
+scripts/
+ChatExport_*/
 
 *.dump
 *.dump.sha256
