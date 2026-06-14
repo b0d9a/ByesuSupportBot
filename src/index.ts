@@ -17,6 +17,23 @@ if (!lockClient) {
 }
 
 const bot = createBot({ pool, config, logger });
+await bot.telegram.setMyCommands([
+  { command: "start", description: "Главное меню" },
+  { command: "faq", description: "FAQ / частые вопросы" },
+  { command: "new", description: "Создать обращение" }
+]);
+await bot.telegram.setMyCommands(
+  [
+    { command: "setup", description: "Настроить служебные топики" },
+    { command: "setup_reset", description: "Пересоздать служебные топики" }
+  ],
+  {
+    scope: {
+      type: "chat_administrators",
+      chat_id: config.supportGroupId
+    }
+  }
+);
 await bot.telegram.getMe().then((me) => logger.info(`Bot started as @${me.username}`));
 
 async function shutdown(signal: string): Promise<void> {

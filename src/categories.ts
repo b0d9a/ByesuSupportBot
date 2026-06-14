@@ -17,15 +17,14 @@ export function categoryLabel(code: string): string {
   return CATEGORIES.find((category) => category.code === code)?.label ?? code;
 }
 
-export function categoryKeyboard() {
-  return Markup.inlineKeyboard(
-    [
-      ...CATEGORIES.map((category) => [
-        Markup.button.callback(category.label, `category:${category.code}`)
-      ]),
-      [Markup.button.callback("FAQ", "faq:list")]
-    ]
-  );
+export function categoryKeyboard(opts: { back?: boolean } = {}) {
+  const backRow = opts.back ? [[Markup.button.callback("Назад", "menu:start")]] : [];
+  return Markup.inlineKeyboard([
+    ...CATEGORIES.map((category) => [
+      Markup.button.callback(category.label, `category:${category.code}`)
+    ]),
+    ...backRow
+  ]);
 }
 
 export function categoryChangeKeyboard(ticketId: number) {

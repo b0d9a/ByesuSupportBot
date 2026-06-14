@@ -5,6 +5,7 @@ import type { Message } from "telegraf/types";
 import { categoryChangeKeyboard, categoryKeyboard, categoryLabel, isCategoryCode } from "./categories.js";
 import type { AppConfig } from "./config.js";
 import { faqListKeyboard, faqListText, faqSectionKeyboard, findFaqSection, formatFaqSection } from "./faq.js";
+import { mainMenuKeyboard, mainMenuText } from "./menu.js";
 import { formatTicketCard, formatTopicTitle } from "./format.js";
 import { Logger } from "./logger.js";
 import { SupportRepository } from "./repository.js";
@@ -81,6 +82,26 @@ async function deleteCurrentCallbackMessage(ctx: Context): Promise<void> {
   }
 }
 
+async function ensureSupportGroupAdmin(ctx: Context, deps: RuntimeDeps, command: string): Promise<boolean> {
+  if (!ctx.chat || ctx.chat.id !== deps.config.supportGroupId) {
+    await ctx.reply(`Команду ${command} нужно выполнить в модераторской супергруппе.`);
+    return false;
+  }
+
+  if (!ctx.from) {
+    await ctx.reply("Не удалось проверить права администратора.");
+    return false;
+  }
+
+  const member = await ctx.telegram.getChatMember(deps.config.supportGroupId, ctx.from.id);
+  if (member.status !== "administrator" && member.status !== "creator") {
+    await ctx.reply("Эта команда доступна только администраторам группы.");
+    return false;
+  }
+
+  return true;
+}
+
 async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<void> {
   if (!ctx.from || !ctx.message || ctx.chat?.type !== "private") {
     return;
@@ -112,7 +133,7 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
         if (selectedCategory) {
           await repo.clearSelectedCategory(user.telegramUserId);
         }
-        await ctx.reply("Выберите тип обращения, затем отправьте первое сообщение.", categoryKeyboard());
+        await ctx.reply(mainMenuText(), mainMenuKeyboard());
         return;
       }
 
@@ -225,8 +246,7 @@ async function handleSupportTopicMessage(ctx: Context, deps: RuntimeDeps): Promi
 }
 
 async function setupServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void> {
-  if (!ctx.chat || ctx.chat.id !== deps.config.supportGroupId) {
-    await ctx.reply("Команду /setup нужно выполнить в модераторской супергруппе.");
+  if (!(await ensureSupportGroupAdmin(ctx, deps, "/setup"))) {
     return;
   }
 
@@ -250,8 +270,7 @@ async function setupServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void
 }
 
 async function resetServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void> {
-  if (!ctx.chat || ctx.chat.id !== deps.config.supportGroupId) {
-    await ctx.reply("Команду /setup_reset нужно выполнить в модераторской супергруппе.");
+  if (!(await ensureSupportGroupAdmin(ctx, deps, "/setup_reset"))) {
     return;
   }
 
@@ -449,13 +468,32 @@ export function createBot(deps: BotDeps): Telegraf {
     }
     const repo = new SupportRepository(deps.pool);
     await repo.upsertUser(telegramUserInput(ctx.from));
-    await ctx.reply("Выберите тип обращения.", categoryKeyboard());
+    await ctx.reply(mainMenuText(), mainMenuKeyboard());
   });
 
   bot.command("setup", async (ctx) => setupServiceTopics(ctx, fullDeps));
   bot.command("setup_reset", async (ctx) => resetServiceTopics(ctx, fullDeps));
   bot.command("faq", async (ctx) => {
     await ctx.reply(faqListText(), faqListKeyboard());
+  });
+  bot.command("new", async (ctx) => {
+    if (!ctx.from || ctx.chat.type !== "private") return;
+    await ctx.reply("Выберите тип обращения.", categoryKeyboard({ back: true }));
+  });
+
+  bot.action("menu:start", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(mainMenuText(), mainMenuKeyboard());
+  });
+
+  bot.action("menu:new_ticket", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText("Выберите тип обращения.", categoryKeyboard({ back: true }));
+  });
+
+  bot.action("menu:faq", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(faqListText(), faqListKeyboard());
   });
 
   bot.action(/^category:(.+)$/, async (ctx) => {

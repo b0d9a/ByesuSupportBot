@@ -115,6 +115,8 @@ export const FAQ_SECTIONS: FaqSection[] = [
       "- есть ли VPN/прокси;",
       "- пример запроса, если это безопасно.",
       "",
+      "Для модераторов: сообщения в топике, начинающиеся с /, не отправляются пользователю. Можно использовать /ignore или /заметка для внутренних заметок.",
+      "",
       "Подписки через бота планируются в будущем, но сейчас основные силы направлены на стабилизацию API. Сейчас доступ предоставляется через API-ключ с балансом."
     ].join("\n")
   }
@@ -129,16 +131,18 @@ export function faqListText(): string {
 }
 
 export function faqListKeyboard() {
-  return Markup.inlineKeyboard(
-    FAQ_SECTIONS.map((section) => [
+  return Markup.inlineKeyboard([
+    ...FAQ_SECTIONS.map((section) => [
       Markup.button.callback(section.title, `faq:section:${section.id}`)
-    ])
-  );
+    ]),
+    [Markup.button.callback("Назад", "menu:start")]
+  ]);
 }
 
 export function faqSectionKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("Назад", "faq:list")]
+    [Markup.button.callback("Назад к FAQ", "faq:list")],
+    [Markup.button.callback("Создать обращение", "menu:new_ticket")]
   ]);
 }
 
