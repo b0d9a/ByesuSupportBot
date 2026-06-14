@@ -45,6 +45,26 @@ export async function migrate(pool: pg.Pool): Promise<void> {
   }
 }
 
+// Stable lock key for this bot process. Chosen arbitrarily; must not collide with other apps on the same DB.
+// pg_try_advisory_lock takes a single bigint (8 bytes). We use a fixed constant documented here.
+// Value: sha256("byesu_support_bot")[0..7] interpreted as int64, truncated to pg bigint range.
+const ADVISORY_LOCK_KEY = 1_862_351_047_294_318n;
+
+/**
+ * Acquire a session-level PostgreSQL advisory lock so only one bot instance runs at a time.
+ * Returns the dedicated PoolClient that holds the lock — keep it open for process lifetime.
+ * Returns null if the lock is already held by another session.
+ */
+export async function acquireAdvisoryLock(pool: pg.Pool): Promise<pg.PoolClient | null> {
+  const client = await pool.connect();
+  const result = await client.query("select pg_try_advisory_lock($1) as acquired", [ADVISORY_LOCK_KEY]);
+  if (result.rows[0].acquired) {
+    return client;
+  }
+  client.release();
+  return null;
+}
+
 export async function inTransaction<T>(pool: pg.Pool, work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
