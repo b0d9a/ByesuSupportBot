@@ -19,9 +19,12 @@ export function categoryLabel(code: string): string {
 
 export function categoryKeyboard() {
   return Markup.inlineKeyboard(
-    CATEGORIES.map((category) => [
-      Markup.button.callback(category.label, `category:${category.code}`)
-    ])
+    [
+      ...CATEGORIES.map((category) => [
+        Markup.button.callback(category.label, `category:${category.code}`)
+      ]),
+      [Markup.button.callback("FAQ", "faq:list")]
+    ]
   );
 }
 

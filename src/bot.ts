@@ -4,6 +4,7 @@ import type { Context } from "telegraf";
 import type { Message } from "telegraf/types";
 import { categoryChangeKeyboard, categoryKeyboard, categoryLabel, isCategoryCode } from "./categories.js";
 import type { AppConfig } from "./config.js";
+import { faqListKeyboard, faqListText, faqSectionKeyboard, findFaqSection, formatFaqSection } from "./faq.js";
 import { formatTicketCard, formatTopicTitle } from "./format.js";
 import { Logger } from "./logger.js";
 import { SupportRepository } from "./repository.js";
@@ -453,6 +454,9 @@ export function createBot(deps: BotDeps): Telegraf {
 
   bot.command("setup", async (ctx) => setupServiceTopics(ctx, fullDeps));
   bot.command("setup_reset", async (ctx) => resetServiceTopics(ctx, fullDeps));
+  bot.command("faq", async (ctx) => {
+    await ctx.reply(faqListText(), faqListKeyboard());
+  });
 
   bot.action(/^category:(.+)$/, async (ctx) => {
     const data = callbackData(ctx);
@@ -467,6 +471,23 @@ export function createBot(deps: BotDeps): Telegraf {
     await repo.setSelectedCategory(ctx.from.id, category);
     await ctx.answerCbQuery(categoryLabel(category));
     await ctx.reply(`Тип обращения: ${categoryLabel(category)}. Теперь отправьте первое сообщение.`);
+  });
+
+  bot.action("faq:list", async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(faqListText(), faqListKeyboard());
+  });
+
+  bot.action(/^faq:section:(.+)$/, async (ctx) => {
+    const sectionId = callbackData(ctx)?.split(":")[2];
+    const section = sectionId ? findFaqSection(sectionId) : null;
+    if (!section) {
+      await ctx.answerCbQuery("Раздел не найден.");
+      return;
+    }
+
+    await ctx.answerCbQuery(section.title);
+    await ctx.editMessageText(formatFaqSection(section), faqSectionKeyboard());
   });
 
   bot.action(/^close:(\d+)$/, async (ctx) => {
