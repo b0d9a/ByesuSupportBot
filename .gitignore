@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+
+node_modules/
+dist/
+logs/
+
+*.dump
+*.dump.sha256
+*.log
+
+.mcp.json
