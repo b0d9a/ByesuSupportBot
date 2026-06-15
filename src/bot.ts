@@ -102,6 +102,23 @@ async function ensureSupportGroupAdmin(ctx: Context, deps: RuntimeDeps, command:
   return true;
 }
 
+async function repairStaleThread(
+  bot: Telegraf,
+  repo: SupportRepository,
+  config: AppConfig,
+  user: UserRecord,
+  ticket: TicketRecord,
+  thread: UserThreadRecord
+): Promise<UserThreadRecord> {
+  const title = formatTopicTitle(ticket.publicCode, ticket.category, user, ticket.status);
+  const topic = await bot.telegram.createForumTopic(config.supportGroupId, title);
+  let updated = await repo.replaceThreadTopic(thread.id, topic.message_thread_id, title);
+  await editForumTopicTitle(bot, config, updated, title, statusEmojiId(ticket.status));
+  updated = await refreshPinnedCard(bot, repo, config, user, ticket, updated);
+  await refreshOpenServiceCard(bot, repo, config, user, ticket, updated);
+  return updated;
+}
+
 async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<void> {
   if (!ctx.from || !ctx.message || ctx.chat?.type !== "private") {
     return;
@@ -149,9 +166,27 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
       return;
     }
 
-    const copied = await ctx.telegram.copyMessage(deps.config.supportGroupId, ctx.chat.id, ctx.message.message_id, {
-      message_thread_id: thread.messageThreadId
-    });
+    let activeThread = thread;
+    let copied: { message_id: number };
+    try {
+      copied = await ctx.telegram.copyMessage(deps.config.supportGroupId, ctx.chat.id, ctx.message.message_id, {
+        message_thread_id: activeThread.messageThreadId
+      });
+    } catch (copyError) {
+      const copyDesc =
+        (copyError as { description?: string }).description ??
+        (copyError as { response?: { description?: string } }).response?.description ??
+        "";
+      if (!copyDesc.includes("TOPIC_ID_INVALID")) {
+        throw copyError;
+      }
+
+      // The stored forum topic no longer exists — create a replacement and retry.
+      activeThread = await repairStaleThread(deps.bot, repo, deps.config, user, ticket, activeThread);
+      copied = await ctx.telegram.copyMessage(deps.config.supportGroupId, ctx.chat.id, ctx.message.message_id, {
+        message_thread_id: activeThread.messageThreadId
+      });
+    }
     await repo.addMessageLink({
       ticketId: ticket.id,
       userId: user.id,
@@ -474,6 +509,7 @@ export function createBot(deps: BotDeps): Telegraf {
   bot.command("setup", async (ctx) => setupServiceTopics(ctx, fullDeps));
   bot.command("setup_reset", async (ctx) => resetServiceTopics(ctx, fullDeps));
   bot.command("faq", async (ctx) => {
+    if (ctx.chat.type !== "private") return;
     await ctx.reply(faqListText(), faqListKeyboard());
   });
   bot.command("new", async (ctx) => {

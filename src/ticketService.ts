@@ -69,7 +69,16 @@ export async function editForumTopicTitle(bot: Telegraf, config: AppConfig, thre
       return;
     }
     if (iconEmojiId && description === "Bad Request: DOCUMENT_INVALID") {
-      await bot.telegram.editForumTopic(config.supportGroupId, thread.messageThreadId, { name: title });
+      try {
+        await bot.telegram.editForumTopic(config.supportGroupId, thread.messageThreadId, { name: title });
+      } catch (fallbackError) {
+        const fallbackDesc =
+          (fallbackError as { description?: string }).description ??
+          (fallbackError as { response?: { description?: string } }).response?.description;
+        if (fallbackDesc !== "Bad Request: TOPIC_NOT_MODIFIED") {
+          throw fallbackError;
+        }
+      }
       return;
     }
     throw error;

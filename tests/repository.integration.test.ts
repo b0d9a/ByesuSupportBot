@@ -295,6 +295,20 @@ describeIntegration("SupportRepository integration", () => {
     expect(cards.rowCount).toBe(1);
   });
 
+  it("replaceThreadTopic updates messageThreadId, clears pinnedMessageId, sets title, sets isClosed=false", async () => {
+    const user = await seedUser();
+    const thread = await repo.createThread(user.id, 99_010, "original title");
+    // Set a pinned message and mark closed.
+    await repo.updateThread(thread.id, { pinnedMessageId: 12_345, isClosed: true });
+
+    const replaced = await repo.replaceThreadTopic(thread.id, 99_011, "new title");
+
+    expect(replaced.messageThreadId).toBe(99_011);
+    expect(replaced.pinnedMessageId).toBeNull();
+    expect(replaced.topicTitle).toBe("new title");
+    expect(replaced.isClosed).toBe(false);
+  });
+
   it("full ticket lifecycle: open → in_review → closed → reopen → close", async () => {
     const user = await seedUser();
 
