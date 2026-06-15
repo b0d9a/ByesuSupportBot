@@ -1,6 +1,6 @@
 import { Markup, type Telegraf } from "telegraf";
 import type { AppConfig } from "./config.js";
-import { formatTicketCard, formatTopicTitle, formatUserCard, statusEmoji, supportTopicUrl } from "./format.js";
+import { formatTicketCard, formatTopicTitle, formatUserCard, statusEmoji, statusEmojiId, supportTopicUrl } from "./format.js";
 import { SupportRepository } from "./repository.js";
 import type { TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
 
@@ -51,13 +51,16 @@ export function closedTicketKeyboard(ticket: TicketRecord, supportGroupId: numbe
   ]);
 }
 
-export async function editForumTopicTitle(bot: Telegraf, config: AppConfig, thread: UserThreadRecord, title: string): Promise<void> {
-  if (thread.topicTitle === title) {
+export async function editForumTopicTitle(bot: Telegraf, config: AppConfig, thread: UserThreadRecord, title: string, iconEmojiId?: string): Promise<void> {
+  if (thread.topicTitle === title && !iconEmojiId) {
     return;
   }
 
   try {
-    await bot.telegram.editForumTopic(config.supportGroupId, thread.messageThreadId, { name: title });
+    await bot.telegram.editForumTopic(config.supportGroupId, thread.messageThreadId, {
+      name: title,
+      ...(iconEmojiId ? { icon_custom_emoji_id: iconEmojiId } : {})
+    });
   } catch (error) {
     const description =
       (error as { description?: string }).description ??
@@ -65,8 +68,20 @@ export async function editForumTopicTitle(bot: Telegraf, config: AppConfig, thre
     if (description === "Bad Request: TOPIC_NOT_MODIFIED") {
       return;
     }
+    if (iconEmojiId && description === "Bad Request: DOCUMENT_INVALID") {
+      await bot.telegram.editForumTopic(config.supportGroupId, thread.messageThreadId, { name: title });
+      return;
+    }
     throw error;
   }
+}
+
+function isTopicInvalidError(error: unknown): boolean {
+  const description =
+    (error as { description?: string }).description ??
+    (error as { response?: { description?: string } }).response?.description ??
+    "";
+  return description.includes("TOPIC_ID_INVALID");
 }
 
 export async function refreshPinnedCard(
@@ -237,15 +252,25 @@ export async function ensureThreadAndTicket(
     // user is not blocked (no DB ticket exists yet). Operational cleanup only.
     thread = await repo.createThread(user.id, topic.message_thread_id, provisionalTitle);
   } else if (thread.isClosed) {
-    await bot.telegram.reopenForumTopic(config.supportGroupId, thread.messageThreadId);
-    thread = await repo.updateThread(thread.id, { isClosed: false });
+    try {
+      await bot.telegram.reopenForumTopic(config.supportGroupId, thread.messageThreadId);
+      thread = await repo.updateThread(thread.id, { isClosed: false });
+    } catch (error) {
+      if (!isTopicInvalidError(error)) {
+        throw error;
+      }
+
+      const replacementTitle = formatTopicTitle("??????", category, user);
+      const topic = await bot.telegram.createForumTopic(config.supportGroupId, replacementTitle);
+      thread = await repo.replaceThreadTopic(thread.id, topic.message_thread_id, replacementTitle);
+    }
   }
 
   const ticket = await repo.createTicket(user.id, category);
   await repo.clearSelectedCategory(user.telegramUserId);
 
   const title = formatTopicTitle(ticket.publicCode, category, user, ticket.status);
-  await editForumTopicTitle(bot, config, thread, title);
+  await editForumTopicTitle(bot, config, thread, title, statusEmojiId(ticket.status));
   thread = await repo.updateThread(thread.id, { title, isClosed: false });
   thread = await refreshPinnedCard(bot, repo, config, user, ticket, thread);
   await postOpenTicketCard(bot, repo, config, user, ticket, thread);

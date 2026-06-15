@@ -147,6 +147,23 @@ export class SupportRepository {
     return mapThread(result.rows[0]);
   }
 
+  async replaceThreadTopic(threadId: number, messageThreadId: number, title: string): Promise<UserThreadRecord> {
+    const result = await this.db.query(
+      `
+        update user_threads set
+          message_thread_id = $2,
+          pinned_message_id = null,
+          topic_title = $3,
+          is_closed = false,
+          updated_at = now()
+        where id = $1
+        returning *
+      `,
+      [threadId, messageThreadId, title]
+    );
+    return mapThread(result.rows[0]);
+  }
+
   async createTicket(userId: number, category: string): Promise<TicketRecord> {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {

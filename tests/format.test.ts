@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatTopicTitle, statusEmoji, statusLabel, supportTopicUrl } from "../src/format.js";
+import { formatTopicTitle, statusEmoji, statusEmojiId, statusLabel, supportTopicUrl } from "../src/format.js";
 import type { UserRecord } from "../src/types.js";
 
 const user: UserRecord = {
@@ -41,15 +41,23 @@ describe("statusLabel", () => {
   });
 });
 
+describe("statusEmojiId", () => {
+  it("returns valid Telegram forum topic icon custom emoji ids", () => {
+    expect(statusEmojiId("open")).toBe("5379748062124056162");
+    expect(statusEmojiId("in_review")).toBe("5312536423851630001");
+    expect(statusEmojiId("closed")).toBe("5237699328843200968");
+  });
+});
+
 describe("formatTopicTitle", () => {
-  it("defaults to open emoji when no status supplied", () => {
-    expect(formatTopicTitle("A1B2C3", "problem", user)).toBe("🔴 #A1B2C3 · Проблема · @client");
+  it("returns title without status emoji prefix", () => {
+    expect(formatTopicTitle("A1B2C3", "problem", user)).toBe("#A1B2C3 · Проблема · @client");
   });
 
-  it("includes status emoji prefix, ticket code, category label and username", () => {
-    expect(formatTopicTitle("A1B2C3", "problem", user, "open")).toBe("🔴 #A1B2C3 · Проблема · @client");
-    expect(formatTopicTitle("A1B2C3", "problem", user, "in_review")).toBe("🟡 #A1B2C3 · Проблема · @client");
-    expect(formatTopicTitle("A1B2C3", "problem", user, "closed")).toBe("🟢 #A1B2C3 · Проблема · @client");
+  it("includes ticket code, category label and username regardless of status", () => {
+    expect(formatTopicTitle("A1B2C3", "problem", user, "open")).toBe("#A1B2C3 · Проблема · @client");
+    expect(formatTopicTitle("A1B2C3", "problem", user, "in_review")).toBe("#A1B2C3 · Проблема · @client");
+    expect(formatTopicTitle("A1B2C3", "problem", user, "closed")).toBe("#A1B2C3 · Проблема · @client");
   });
 
   it("keeps Telegram forum topic title within the API limit", () => {

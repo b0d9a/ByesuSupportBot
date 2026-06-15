@@ -8,6 +8,13 @@ export function statusEmoji(status: TicketStatus): string {
   return "🟢";
 }
 
+// Telegram only accepts custom_emoji_id values returned by getForumTopicIconStickers.
+export function statusEmojiId(status: TicketStatus): string {
+  if (status === "open") return "5379748062124056162"; // ❗️
+  if (status === "in_review") return "5312536423851630001"; // 💡
+  return "5237699328843200968"; // ✅
+}
+
 export function statusLabel(status: TicketStatus): string {
   if (status === "open") return "открыто";
   if (status === "in_review") return "на рассмотрении";
@@ -25,9 +32,9 @@ export function displayName(user: Pick<UserRecord, "firstName" | "lastName" | "u
   return String(user.telegramUserId);
 }
 
-export function formatTopicTitle(ticketCode: string, category: string, user: Pick<UserRecord, "username" | "firstName" | "lastName" | "telegramUserId">, status: TicketStatus = "open"): string {
+export function formatTopicTitle(ticketCode: string, category: string, user: Pick<UserRecord, "username" | "firstName" | "lastName" | "telegramUserId">, _status: TicketStatus = "open"): string {
   const suffix = user.username ? `@${user.username}` : displayName(user);
-  return `${statusEmoji(status)} #${ticketCode} · ${categoryLabel(category)} · ${suffix}`.slice(0, 128);
+  return `#${ticketCode} · ${categoryLabel(category)} · ${suffix}`.slice(0, 128);
 }
 
 export function formatUserCard(user: UserRecord, ticket: TicketRecord, stats: UserStats): string {

@@ -6,7 +6,7 @@ import { categoryChangeKeyboard, categoryKeyboard, categoryLabel, isCategoryCode
 import type { AppConfig } from "./config.js";
 import { faqListKeyboard, faqListText, faqSectionKeyboard, findFaqSection, formatFaqSection } from "./faq.js";
 import { mainMenuKeyboard, mainMenuText } from "./menu.js";
-import { formatTicketCard, formatTopicTitle } from "./format.js";
+import { formatTicketCard, formatTopicTitle, statusEmojiId } from "./format.js";
 import { Logger } from "./logger.js";
 import { SupportRepository } from "./repository.js";
 import { deleteServiceCardMessage, editForumTopicTitle, ensureThreadAndTicket, moderatorTicketKeyboard, postClosedTicketCard, postOpenTicketCard, refreshOpenServiceCard, refreshPinnedCard } from "./ticketService.js";
@@ -298,7 +298,7 @@ async function closeTicket(ctx: Context, deps: RuntimeDeps, ticketId: number): P
 
   try {
     const closedTitle = formatTopicTitle(ticket.publicCode, ticket.category, user, ticket.status);
-    await editForumTopicTitle(deps.bot, deps.config, updatedThread, closedTitle);
+    await editForumTopicTitle(deps.bot, deps.config, updatedThread, closedTitle, statusEmojiId(ticket.status));
     updatedThread = await repo.updateThread(updatedThread.id, { title: closedTitle });
     await refreshPinnedCard(deps.bot, repo, deps.config, user, ticket, updatedThread);
     await deleteServiceCardMessage(deps.bot, repo, deps.config, ticket, "open_tickets");
@@ -343,7 +343,7 @@ async function reopenTicket(ctx: Context, deps: RuntimeDeps, ticketId: number): 
   try {
     await deps.bot.telegram.reopenForumTopic(deps.config.supportGroupId, thread.messageThreadId);
     const title = formatTopicTitle(ticket.publicCode, ticket.category, user, ticket.status);
-    await editForumTopicTitle(deps.bot, deps.config, thread, title);
+    await editForumTopicTitle(deps.bot, deps.config, thread, title, statusEmojiId(ticket.status));
     thread = await repo.updateThread(thread.id, { title, isClosed: false });
     thread = await refreshPinnedCard(deps.bot, repo, deps.config, user, ticket, thread);
     await deleteServiceCardMessage(deps.bot, repo, deps.config, ticket, "closed_tickets");
@@ -394,7 +394,7 @@ async function changeTicketCategory(ctx: Context, deps: RuntimeDeps, ticketId: n
 
   try {
     const title = formatTopicTitle(ticket.publicCode, ticket.category, user, ticket.status);
-    await editForumTopicTitle(deps.bot, deps.config, thread, title);
+    await editForumTopicTitle(deps.bot, deps.config, thread, title, statusEmojiId(ticket.status));
     thread = await repo.updateThread(thread.id, { title });
     thread = await refreshPinnedCard(deps.bot, repo, deps.config, user, ticket, thread);
     await refreshOpenServiceCard(deps.bot, repo, deps.config, user, ticket, thread);
@@ -435,7 +435,7 @@ async function setTicketStatus(ctx: Context, deps: RuntimeDeps, ticketId: number
 
   try {
     const title = formatTopicTitle(ticket.publicCode, ticket.category, user, ticket.status);
-    await editForumTopicTitle(deps.bot, deps.config, thread, title);
+    await editForumTopicTitle(deps.bot, deps.config, thread, title, statusEmojiId(ticket.status));
     thread = await repo.updateThread(thread.id, { title });
     thread = await refreshPinnedCard(deps.bot, repo, deps.config, user, ticket, thread);
     await refreshOpenServiceCard(deps.bot, repo, deps.config, user, ticket, thread);
