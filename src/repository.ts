@@ -220,7 +220,7 @@ export class SupportRepository {
   }
 
   async updateTicketCategory(ticketId: number, category: string): Promise<TicketRecord | null> {
-    const result = await this.db.query("update tickets set category = $2 where id = $1 returning *", [ticketId, category]);
+    const result = await this.db.query("update tickets set category = $2 where id = $1 and status != 'closed' returning *", [ticketId, category]);
     return result.rows[0] ? mapTicket(result.rows[0]) : null;
   }
 

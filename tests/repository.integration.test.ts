@@ -121,6 +121,19 @@ describeIntegration("SupportRepository integration", () => {
     expect(updated?.category).toBe("problem");
   });
 
+  it("updateTicketCategory does not update a closed ticket", async () => {
+    const user = await seedUser();
+    const ticket = await repo.createTicket(user.id, "question");
+    await repo.closeTicket(ticket.id);
+
+    const updated = await repo.updateTicketCategory(ticket.id, "problem");
+    expect(updated).toBeNull();
+
+    const found = await repo.findTicketById(ticket.id);
+    expect(found?.category).toBe("question");
+    expect(found?.status).toBe("closed");
+  });
+
   it("selectedCategory round-trip: set, get, clear", async () => {
     const user = await seedUser();
     await repo.setSelectedCategory(user.telegramUserId, "question");

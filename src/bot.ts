@@ -74,6 +74,14 @@ function callbackData(ctx: Context): string | null {
   return query.data;
 }
 
+async function answerPrivateOnly(ctx: Context): Promise<boolean> {
+  if (ctx.chat?.type === "private") {
+    return true;
+  }
+  await ctx.answerCbQuery("Эта кнопка доступна только в личном чате с ботом.");
+  return false;
+}
+
 async function deleteCurrentCallbackMessage(ctx: Context): Promise<void> {
   try {
     await ctx.deleteMessage();
@@ -106,16 +114,26 @@ async function repairStaleThread(
   bot: Telegraf,
   repo: SupportRepository,
   config: AppConfig,
+  logger: Logger,
   user: UserRecord,
   ticket: TicketRecord,
   thread: UserThreadRecord
 ): Promise<UserThreadRecord> {
   const title = formatTopicTitle(ticket.publicCode, ticket.category, user, ticket.status);
+  const previousMessageThreadId = thread.messageThreadId;
   const topic = await bot.telegram.createForumTopic(config.supportGroupId, title);
   let updated = await repo.replaceThreadTopic(thread.id, topic.message_thread_id, title);
   await editForumTopicTitle(bot, config, updated, title, statusEmojiId(ticket.status));
   updated = await refreshPinnedCard(bot, repo, config, user, ticket, updated);
   await refreshOpenServiceCard(bot, repo, config, user, ticket, updated);
+  logger.warn("Repaired stale support topic", {
+    operation: "repairStaleThread",
+    ticketId: ticket.id,
+    userId: user.id,
+    telegramUserId: user.telegramUserId,
+    previousMessageThreadId,
+    messageThreadId: updated.messageThreadId
+  });
   return updated;
 }
 
@@ -182,7 +200,7 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
       }
 
       // The stored forum topic no longer exists — create a replacement and retry.
-      activeThread = await repairStaleThread(deps.bot, repo, deps.config, user, ticket, activeThread);
+      activeThread = await repairStaleThread(deps.bot, repo, deps.config, deps.logger, user, ticket, activeThread);
       copied = await ctx.telegram.copyMessage(deps.config.supportGroupId, ctx.chat.id, ctx.message.message_id, {
         message_thread_id: activeThread.messageThreadId
       });
@@ -518,21 +536,25 @@ export function createBot(deps: BotDeps): Telegraf {
   });
 
   bot.action("menu:start", async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
     await ctx.answerCbQuery();
     await ctx.editMessageText(mainMenuText(), mainMenuKeyboard());
   });
 
   bot.action("menu:new_ticket", async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
     await ctx.answerCbQuery();
     await ctx.editMessageText("Выберите тип обращения.", categoryKeyboard({ back: true }));
   });
 
   bot.action("menu:faq", async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
     await ctx.answerCbQuery();
     await ctx.editMessageText(faqListText(), faqListKeyboard());
   });
 
   bot.action(/^category:(.+)$/, async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
     const data = callbackData(ctx);
     const category = data?.split(":")[1];
     if (!category || !isCategoryCode(category) || !ctx.from) {
@@ -548,11 +570,13 @@ export function createBot(deps: BotDeps): Telegraf {
   });
 
   bot.action("faq:list", async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
     await ctx.answerCbQuery();
     await ctx.editMessageText(faqListText(), faqListKeyboard());
   });
 
   bot.action(/^faq:section:(.+)$/, async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
     const sectionId = callbackData(ctx)?.split(":")[2];
     const section = sectionId ? findFaqSection(sectionId) : null;
     if (!section) {
