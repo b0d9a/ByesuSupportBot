@@ -90,6 +90,12 @@ describe("isOffTopicMessage", () => {
     "Как настроить Roo Code?",
     "Ошибка no available channels",
     "Какие модели поддерживаются?",
+    // Previously false-positive — must NOT be blocked
+    "перевод по СБП не прошёл",
+    "напиши пример запроса к Byesu API",
+    "промокод не активируется, что делать?",
+    "Как использовать gpt-5.5 через Codex?",
+    "какой курс обмена используется при пополнении?",
   ];
 
   for (const msg of offTopic) {

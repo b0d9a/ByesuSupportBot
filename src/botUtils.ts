@@ -49,17 +49,39 @@ export function isAiAnswerUsable(result: AiAnswer): result is { confident: true;
 
 // Patterns that reliably identify off-topic messages not related to Byesu support.
 // Conservative: only block obvious chatbot abuse, never Byesu-related queries.
+// Note: \b does not work with Cyrillic in JS; use (?<![а-яёА-ЯЁ]) / (?![а-яёА-ЯЁ]) or
+// rely on word position context in the pattern itself.
+const CYR_START = "(?<![а-яёА-ЯЁa-zA-Z0-9])";
+const CYR_END = "(?![а-яёА-ЯЁa-zA-Z0-9])";
+
 const OFF_TOPIC_PATTERNS: RegExp[] = [
-  /анекдот|расскажи.{0,20}(шутк|историю|стих|сказк)/iu,
-  /погод[аеуы]/iu,
-  /президент|премьер.?министр|политик/iu,
-  /переведи|перевод|translate/iu,
-  /биткоин|bitcoin|курс (доллар|евро|btc|eth)/iu,
-  /напиши.{0,30}(скрипт|код|функци|программ|класс|метод)/iu,
-  /игнорир|забудь.{0,20}инструкци|ты теперь|притворись|roleplay|jailbreak/iu,
-  /system prompt|системный промпт|твои правила|твои инструкци/iu,
-  /что ты умеешь|что ты можешь|кто ты|ты (бот|ии|gpt|chatgpt|claude)/iu,
-  /какая сегодня|какой сейчас (год|день|час)/iu,
+  // Jokes / stories / poems
+  /расскажи.{0,20}(анекдот|шутк|историю|стих|сказк)/iu,
+  // Weather
+  new RegExp(`${CYR_START}погод[аеуы]${CYR_END}`, "iu"),
+  // Politics — president/PM + country context
+  /(президент|премьер.?министр).{0,40}(сша|росси|стран|мир[ае])/iu,
+  // Explicit translation imperative — "переведи" but not "перевод по СБП"
+  new RegExp(`${CYR_START}переведи${CYR_END}`, "iu"),
+  /\btranslate\b/iu,
+  // Crypto price
+  new RegExp(`${CYR_START}(биткоин|bitcoin)${CYR_END}`, "iu"),
+  /курс.{0,20}(btc|eth|крипт|доллар|евро)/iu,
+  // Generic off-topic coding — "напиши скрипт/функцию/программу" but NOT "напиши запрос/пример"
+  /напиши.{0,40}(скрипт|функци[юя]|программ[уа]|(?<![а-яёА-ЯЁ])класс(?![а-яёА-ЯЁ]))/iu,
+  // Prompt injection / jailbreak
+  /(игнорируй|забудь).{0,30}(инструкци|правил|систем)/iu,
+  /ты теперь.{0,20}(бот|агент|ии|ai|gpt|другой)/iu,
+  /\b(roleplay|jailbreak)\b/iu,
+  /(system prompt|системный промпт)/iu,
+  /(твои правила|твои инструкци)/iu,
+  // Identity / capability questions
+  /(^|[^а-яёА-ЯЁ])(кто ты|что ты умеешь|что ты можешь)([^а-яёА-ЯЁ]|$)/iu,
+  /ты.{0,10}(chatgpt|gpt-[0-9]|claude-[a-z]|gemini)/iu,
+  /^ты\s+(бот|чатбот|ии|ai)\??$/iu,
+  // Time / date
+  /какая сегодня (погода|дата|температур)/iu,
+  /какой сейчас (год|день|час)/iu,
 ];
 
 /**
