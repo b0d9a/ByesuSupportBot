@@ -13,7 +13,7 @@ import { SupportRepository } from "./repository.js";
 import { deleteServiceCardMessage, editForumTopicTitle, ensureThreadAndTicket, moderatorTicketKeyboard, postClosedTicketCard, postOpenTicketCard, refreshOpenServiceCard, refreshPinnedCard } from "./ticketService.js";
 import { ticketNumber } from "./ticketCode.js";
 import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
-import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable } from "./botUtils.js";
+import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, formatModeratorEscalationContext, formatModeratorNewMessageContext } from "./botUtils.js";
 
 const lastMessageAt = new Map<number, number>();
 const lastNoticeAt = new Map<number, number>();
@@ -176,6 +176,33 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
         return;
       }
 
+      // If a pending AI session exists and the user sends a new message instead of
+      // clicking a button, treat it as implicit escalation to a human.
+      const existingPending = pendingQuestions.get(telegramUserId);
+      if (existingPending && hasText(ctx.message) && !isCommandMessage(ctx.message)) {
+        const newText = ctx.message.text;
+        pendingQuestions.delete(telegramUserId);
+        const { ticket: pendingTicket, thread: pendingThread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
+        const contextMsg = formatModeratorNewMessageContext(existingPending.text, existingPending.aiAnswer, newText);
+        const sent = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, contextMsg, {
+          message_thread_id: pendingThread.messageThreadId
+        });
+        await repo.addMessageLink({
+          ticketId: pendingTicket.id,
+          userId: user.id,
+          direction: "user_to_support",
+          sourceChatId: telegramUserId,
+          sourceMessageId: null,
+          targetChatId: deps.config.supportGroupId,
+          targetMessageId: sent.message_id
+        });
+        repo.logAiInteraction(user.id, "escalated", existingPending.text.length).catch((err) => {
+          deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+        });
+        await ctx.reply(`Обращение ${ticketNumber(pendingTicket)} открыто. Сейчас подключится оператор — ответим здесь.`);
+        return;
+      }
+
       // AI gate: try to answer from the knowledge base before opening a ticket.
       // Only the very first message of a new conversation reaches here, so the AI
       // never intercepts an ongoing exchange with a human agent. On any doubt the
@@ -186,7 +213,10 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
         if (isAiAnswerUsable(aiResult)) {
           // Keep the category selection and remember the question so "talk to a
           // human" can escalate without asking the user to retype it.
-          pendingQuestions.set(telegramUserId, { text: question, at: Date.now() });
+          pendingQuestions.set(telegramUserId, { text: question, aiAnswer: aiResult.answer, at: Date.now() });
+          repo.logAiInteraction(user.id, "answered", question.length).catch((err) => {
+            deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+          });
           await ctx.reply(aiResult.answer, aiAnswerKeyboard());
           return;
         }
@@ -358,8 +388,9 @@ async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
 
   const { ticket, thread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
 
-  // Forward the original question into the topic so the moderator has full context.
-  const sent = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, pending.text, {
+  // Forward the original question and AI answer so the moderator has full context.
+  const contextMsg = formatModeratorEscalationContext(pending.text, pending.aiAnswer);
+  const sent = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, contextMsg, {
     message_thread_id: thread.messageThreadId
   });
   await repo.addMessageLink({

@@ -5,9 +5,11 @@ export const RATE_LIMIT_MS = 1000;
 export const RATE_LIMIT_NOTICE_MS = 10_000;
 export const RATE_LIMIT_TTL_MS = 60_000;
 export const PENDING_QUESTION_TTL_MS = 30 * 60_000;
+export const AI_ANSWER_MAX_CHARS = 3500;
 
 export interface PendingQuestion {
   text: string;
+  aiAnswer: string;
   at: number;
 }
 
@@ -39,5 +41,13 @@ export function pruneStalePendingQuestions(pendingQuestions: Map<number, Pending
 }
 
 export function isAiAnswerUsable(result: AiAnswer): result is { confident: true; answer: string } {
-  return result.confident && typeof result.answer === "string" && result.answer.trim().length > 0;
+  return result.confident && typeof result.answer === "string" && result.answer.trim().length > 0 && result.answer.length <= AI_ANSWER_MAX_CHARS;
+}
+
+export function formatModeratorEscalationContext(question: string, aiAnswer: string): string {
+  return `⚠️ Пользователь запросил оператора после ответа ИИ.\n\n❓ Вопрос пользователя:\n${question}\n\n🤖 Ответ ИИ:\n${aiAnswer}`;
+}
+
+export function formatModeratorNewMessageContext(oldQuestion: string, aiAnswer: string, newMessage: string): string {
+  return `⚠️ Пользователь написал новый вопрос во время ожидания ответа ИИ.\n\n❓ Исходный вопрос:\n${oldQuestion}\n\n🤖 Ответ ИИ:\n${aiAnswer}\n\n💬 Новое сообщение:\n${newMessage}`;
 }

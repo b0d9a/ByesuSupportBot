@@ -3,13 +3,16 @@ import {
   RATE_LIMIT_MS,
   RATE_LIMIT_NOTICE_MS,
   PENDING_QUESTION_TTL_MS,
+  AI_ANSWER_MAX_CHARS,
   type PendingQuestion,
   hasText,
   isCommandMessage,
   isRateLimited,
   shouldSendRateLimitNotice,
   pruneStalePendingQuestions,
-  isAiAnswerUsable
+  isAiAnswerUsable,
+  formatModeratorEscalationContext,
+  formatModeratorNewMessageContext
 } from "../src/botUtils.js";
 
 // ---------------------------------------------------------------------------
@@ -110,7 +113,7 @@ describe("shouldSendRateLimitNotice", () => {
 // ---------------------------------------------------------------------------
 describe("pruneStalePendingQuestions", () => {
   function makeMap(entries: Array<[number, number]>): Map<number, PendingQuestion> {
-    return new Map(entries.map(([id, at]) => [id, { text: "q", at }]));
+    return new Map(entries.map(([id, at]) => [id, { text: "q", aiAnswer: "a", at }]));
   }
 
   it("removes entries older than the TTL", () => {
@@ -160,5 +163,54 @@ describe("isAiAnswerUsable", () => {
 
   it("returns false for the NOT_CONFIDENT sentinel value", () => {
     expect(isAiAnswerUsable({ confident: false, answer: "" })).toBe(false);
+  });
+
+  it("returns false when answer exceeds AI_ANSWER_MAX_CHARS", () => {
+    const longAnswer = "a".repeat(AI_ANSWER_MAX_CHARS + 1);
+    expect(isAiAnswerUsable({ confident: true, answer: longAnswer })).toBe(false);
+  });
+
+  it("returns true when answer is exactly AI_ANSWER_MAX_CHARS", () => {
+    const maxAnswer = "a".repeat(AI_ANSWER_MAX_CHARS);
+    expect(isAiAnswerUsable({ confident: true, answer: maxAnswer })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatModeratorEscalationContext
+// ---------------------------------------------------------------------------
+describe("formatModeratorEscalationContext", () => {
+  it("includes the user question", () => {
+    const result = formatModeratorEscalationContext("Как пополнить?", "Пополните через раздел X.");
+    expect(result).toContain("Как пополнить?");
+  });
+
+  it("includes the AI answer", () => {
+    const result = formatModeratorEscalationContext("Как пополнить?", "Пополните через раздел X.");
+    expect(result).toContain("Пополните через раздел X.");
+  });
+
+  it("indicates the user requested a human", () => {
+    const result = formatModeratorEscalationContext("q", "a");
+    expect(result).toContain("оператора");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatModeratorNewMessageContext
+// ---------------------------------------------------------------------------
+describe("formatModeratorNewMessageContext", () => {
+  it("includes old question, AI answer, and new message", () => {
+    const result = formatModeratorNewMessageContext("Старый вопрос", "Ответ ИИ", "Новое сообщение");
+    expect(result).toContain("Старый вопрос");
+    expect(result).toContain("Ответ ИИ");
+    expect(result).toContain("Новое сообщение");
+  });
+
+  it("distinguishes new message from old question", () => {
+    const result = formatModeratorNewMessageContext("original", "ai", "followup");
+    const newMsgIdx = result.indexOf("followup");
+    const oldQIdx = result.indexOf("original");
+    expect(newMsgIdx).toBeGreaterThan(oldQIdx);
   });
 });
