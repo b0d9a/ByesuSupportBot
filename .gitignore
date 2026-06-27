@@ -14,3 +14,4 @@ ChatExport_*/
 *.log
 
 .mcp.json
+.claude/
