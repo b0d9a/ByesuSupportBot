@@ -4,6 +4,7 @@ import {
   RATE_LIMIT_NOTICE_MS,
   PENDING_QUESTION_TTL_MS,
   AI_ANSWER_MAX_CHARS,
+  TELEGRAM_MSG_LIMIT,
   type PendingQuestion,
   hasText,
   isCommandMessage,
@@ -194,6 +195,30 @@ describe("formatModeratorEscalationContext", () => {
     const result = formatModeratorEscalationContext("q", "a");
     expect(result).toContain("оператора");
   });
+
+  it("never exceeds TELEGRAM_MSG_LIMIT for short inputs", () => {
+    const result = formatModeratorEscalationContext("short", "short answer");
+    expect(result.length).toBeLessThanOrEqual(TELEGRAM_MSG_LIMIT);
+  });
+
+  it("never exceeds TELEGRAM_MSG_LIMIT when both fields are very long", () => {
+    const long = "x".repeat(4000);
+    const result = formatModeratorEscalationContext(long, long);
+    expect(result.length).toBeLessThanOrEqual(TELEGRAM_MSG_LIMIT);
+  });
+
+  it("truncates the question and includes truncation marker", () => {
+    const long = "q".repeat(4000);
+    const result = formatModeratorEscalationContext(long, "short");
+    expect(result).toContain("…[обрезано]");
+  });
+
+  it("preserves section headers even when fields are truncated", () => {
+    const long = "x".repeat(4000);
+    const result = formatModeratorEscalationContext(long, long);
+    expect(result).toContain("❓ Вопрос пользователя:");
+    expect(result).toContain("🤖 Ответ ИИ:");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -212,5 +237,24 @@ describe("formatModeratorNewMessageContext", () => {
     const newMsgIdx = result.indexOf("followup");
     const oldQIdx = result.indexOf("original");
     expect(newMsgIdx).toBeGreaterThan(oldQIdx);
+  });
+
+  it("never exceeds TELEGRAM_MSG_LIMIT for short inputs", () => {
+    const result = formatModeratorNewMessageContext("q", "a", "n");
+    expect(result.length).toBeLessThanOrEqual(TELEGRAM_MSG_LIMIT);
+  });
+
+  it("never exceeds TELEGRAM_MSG_LIMIT when all fields are very long", () => {
+    const long = "x".repeat(4000);
+    const result = formatModeratorNewMessageContext(long, long, long);
+    expect(result.length).toBeLessThanOrEqual(TELEGRAM_MSG_LIMIT);
+  });
+
+  it("preserves all section headers even when fields are truncated", () => {
+    const long = "x".repeat(4000);
+    const result = formatModeratorNewMessageContext(long, long, long);
+    expect(result).toContain("❓ Исходный вопрос:");
+    expect(result).toContain("🤖 Ответ ИИ:");
+    expect(result).toContain("💬 Новое сообщение:");
   });
 });

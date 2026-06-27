@@ -181,12 +181,12 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
       const existingPending = pendingQuestions.get(telegramUserId);
       if (existingPending && hasText(ctx.message) && !isCommandMessage(ctx.message)) {
         const newText = ctx.message.text;
-        pendingQuestions.delete(telegramUserId);
         const { ticket: pendingTicket, thread: pendingThread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
         const contextMsg = formatModeratorNewMessageContext(existingPending.text, existingPending.aiAnswer, newText);
         const sent = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, contextMsg, {
           message_thread_id: pendingThread.messageThreadId
         });
+        pendingQuestions.delete(telegramUserId);
         await repo.addMessageLink({
           ticketId: pendingTicket.id,
           userId: user.id,
