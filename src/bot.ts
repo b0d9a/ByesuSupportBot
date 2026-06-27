@@ -1,7 +1,8 @@
 import pg from "pg";
-import { Telegraf } from "telegraf";
+import { Markup, Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 import type { Message } from "telegraf/types";
+import { AiAssistant } from "./ai.js";
 import { categoryChangeKeyboard, categoryKeyboard, categoryLabel, isCategoryCode } from "./categories.js";
 import type { AppConfig } from "./config.js";
 import { faqListKeyboard, faqListText, faqSectionKeyboard, findFaqSection, formatFaqSection } from "./faq.js";
@@ -12,10 +13,8 @@ import { SupportRepository } from "./repository.js";
 import { deleteServiceCardMessage, editForumTopicTitle, ensureThreadAndTicket, moderatorTicketKeyboard, postClosedTicketCard, postOpenTicketCard, refreshOpenServiceCard, refreshPinnedCard } from "./ticketService.js";
 import { ticketNumber } from "./ticketCode.js";
 import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
+import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable } from "./botUtils.js";
 
-const RATE_LIMIT_MS = 1000;
-const RATE_LIMIT_NOTICE_MS = 10_000;
-const RATE_LIMIT_TTL_MS = 60_000;
 const lastMessageAt = new Map<number, number>();
 const lastNoticeAt = new Map<number, number>();
 
@@ -31,6 +30,20 @@ function pruneRateLimitMaps(): void {
 
 setInterval(pruneRateLimitMaps, RATE_LIMIT_TTL_MS).unref();
 
+// Last question the user asked while the AI was answering, kept so the
+// "talk to a human" button can forward it to moderators verbatim. In-memory and
+// short-lived by design — a forgotten entry just means the user re-sends.
+const pendingQuestions = new Map<number, PendingQuestion>();
+
+setInterval(() => pruneStalePendingQuestions(pendingQuestions, Date.now()), PENDING_QUESTION_TTL_MS).unref();
+
+function aiAnswerKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("Это помогло ✅", "ai:resolved")],
+    [Markup.button.callback("Нужен человек 👤", "ai:human")]
+  ]);
+}
+
 interface BotDeps {
   pool: pg.Pool;
   config: AppConfig;
@@ -39,6 +52,7 @@ interface BotDeps {
 
 interface RuntimeDeps extends BotDeps {
   bot: Telegraf;
+  ai: AiAssistant;
 }
 
 const SERVICE_TOPICS: Array<{ kind: ServiceTopicKind; title: string }> = [
@@ -56,14 +70,6 @@ function telegramUserInput(from: NonNullable<Context["from"]>): TelegramUserInpu
     last_name: from.last_name,
     language_code: from.language_code
   };
-}
-
-function hasText(message: Message): message is Message.TextMessage {
-  return "text" in message;
-}
-
-function isCommandMessage(message: Message): boolean {
-  return hasText(message) && message.text.startsWith("/");
 }
 
 function callbackData(ctx: Context): string | null {
@@ -145,10 +151,8 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
   const telegramUserId = ctx.from.id;
 
   const now = Date.now();
-  const last = lastMessageAt.get(telegramUserId) ?? 0;
-  if (now - last < RATE_LIMIT_MS) {
-    const lastNotice = lastNoticeAt.get(telegramUserId) ?? 0;
-    if (now - lastNotice >= RATE_LIMIT_NOTICE_MS) {
+  if (isRateLimited(lastMessageAt, telegramUserId, now)) {
+    if (shouldSendRateLimitNotice(lastNoticeAt, telegramUserId, now)) {
       lastNoticeAt.set(telegramUserId, now);
       await ctx.reply("Пожалуйста, не отправляйте сообщения так быстро. Подождите немного и попробуйте снова.");
     }
@@ -172,9 +176,30 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
         return;
       }
 
+      // AI gate: try to answer from the knowledge base before opening a ticket.
+      // Only the very first message of a new conversation reaches here, so the AI
+      // never intercepts an ongoing exchange with a human agent. On any doubt the
+      // assistant returns confident=false and we fall through to escalation.
+      if (deps.ai.enabled && hasText(ctx.message) && !isCommandMessage(ctx.message)) {
+        const question = ctx.message.text;
+        const aiResult = await deps.ai.tryAnswer(question);
+        if (isAiAnswerUsable(aiResult)) {
+          // Keep the category selection and remember the question so "talk to a
+          // human" can escalate without asking the user to retype it.
+          pendingQuestions.set(telegramUserId, { text: question, at: Date.now() });
+          await ctx.reply(aiResult.answer, aiAnswerKeyboard());
+          return;
+        }
+        // AI was enabled but not confident — log before falling through to human.
+        repo.logAiInteraction(user.id, "not_confident", question.length).catch((err) => {
+          deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+        });
+      }
+
       const created = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
       ticket = created.ticket;
       thread = created.thread;
+      pendingQuestions.delete(telegramUserId);
       await ctx.reply(`Обращение ${ticketNumber(ticket)} открыто. Мы ответим здесь.`);
     }
 
@@ -296,6 +321,62 @@ async function handleSupportTopicMessage(ctx: Context, deps: RuntimeDeps): Promi
       // If the reply itself fails there is nothing more we can do.
     }
   }
+}
+
+async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
+  if (!ctx.from || ctx.chat?.type !== "private") {
+    return;
+  }
+  const telegramUserId = ctx.from.id;
+
+  const repo = new SupportRepository(deps.pool);
+  const user = await repo.upsertUser(telegramUserInput(ctx.from));
+
+  // If a ticket already exists (e.g. double tap), just confirm — the user's
+  // messages are already routed to the topic.
+  const existing = await repo.getActiveTicket(user.id);
+  if (existing) {
+    await ctx.reply(`Обращение ${ticketNumber(existing)} уже открыто. Напишите сюда, и мы продолжим.`);
+    return;
+  }
+
+  const selectedCategory = await repo.getSelectedCategory(user.telegramUserId);
+  if (!selectedCategory || !isCategoryCode(selectedCategory)) {
+    await ctx.reply(mainMenuText(), mainMenuKeyboard());
+    return;
+  }
+
+  // The original question is kept in pendingQuestions only for the lifetime of
+  // this process. If the bot restarted after the AI answered (or the 30-min TTL
+  // expired), the entry is gone. In that case we ask the user to resend rather
+  // than opening a blank ticket that gives the moderator no context.
+  const pending = pendingQuestions.get(telegramUserId);
+  if (!pending?.text) {
+    await ctx.reply("Сессия истекла — пожалуйста, напишите ваш вопрос ещё раз, и мы сразу передадим его оператору.");
+    return;
+  }
+
+  const { ticket, thread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
+
+  // Forward the original question into the topic so the moderator has full context.
+  const sent = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, pending.text, {
+    message_thread_id: thread.messageThreadId
+  });
+  await repo.addMessageLink({
+    ticketId: ticket.id,
+    userId: user.id,
+    direction: "user_to_support",
+    sourceChatId: telegramUserId,
+    sourceMessageId: null,
+    targetChatId: deps.config.supportGroupId,
+    targetMessageId: sent.message_id
+  });
+  repo.logAiInteraction(user.id, "escalated", pending.text.length).catch((err) => {
+    deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+  });
+  pendingQuestions.delete(telegramUserId);
+
+  await ctx.reply(`Обращение ${ticketNumber(ticket)} открыто. Сейчас подключится оператор — ответим здесь.`);
 }
 
 async function setupServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void> {
@@ -471,7 +552,7 @@ async function changeTicketCategory(ctx: Context, deps: RuntimeDeps, ticketId: n
   }
 }
 
-async function setTicketStatus(ctx: Context, deps: RuntimeDeps, ticketId: number, newStatus: TicketStatus): Promise<void> {
+async function setTicketStatus(ctx: Context, deps: RuntimeDeps, ticketId: number, newStatus: "open" | "in_review"): Promise<void> {
   const repo = new SupportRepository(deps.pool);
   const ticket = await repo.setTicketStatus(ticketId, newStatus);
   if (!ticket) {
@@ -513,7 +594,8 @@ async function setTicketStatus(ctx: Context, deps: RuntimeDeps, ticketId: number
 
 export function createBot(deps: BotDeps): Telegraf {
   const bot = new Telegraf(deps.config.botToken);
-  const fullDeps = { ...deps, bot };
+  const ai = new AiAssistant(deps.config.ai, deps.logger);
+  const fullDeps = { ...deps, bot, ai };
 
   bot.start(async (ctx) => {
     if (!ctx.from || ctx.chat.type !== "private") {
@@ -586,6 +668,36 @@ export function createBot(deps: BotDeps): Telegraf {
 
     await ctx.answerCbQuery(section.title);
     await ctx.editMessageText(formatFaqSection(section), faqSectionKeyboard());
+  });
+
+  bot.action("ai:resolved", async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
+    const pending = ctx.from ? pendingQuestions.get(ctx.from.id) : undefined;
+    if (ctx.from) {
+      pendingQuestions.delete(ctx.from.id);
+    }
+    await ctx.answerCbQuery("Рады помочь!");
+    await ctx.editMessageReplyMarkup(undefined);
+    await ctx.reply("Отлично! Если появится новый вопрос — просто напишите сюда.");
+    if (ctx.from && pending) {
+      const repo = new SupportRepository(deps.pool);
+      const user = await repo.findUserByTelegramId(ctx.from.id);
+      repo.logAiInteraction(user?.id ?? null, "resolved", pending.text.length).catch((err) => {
+        deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+      });
+    }
+  });
+
+  bot.action("ai:human", async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
+    await ctx.answerCbQuery("Подключаем оператора…");
+    await ctx.editMessageReplyMarkup(undefined);
+    try {
+      await escalateToHuman(ctx, fullDeps);
+    } catch (error) {
+      deps.logger.error("ai:human escalation failed", { operation: "ai:human", error });
+      await ctx.reply("Не удалось открыть обращение. Попробуйте написать сообщение ещё раз.");
+    }
   });
 
   bot.action(/^close:(\d+)$/, async (ctx) => {
