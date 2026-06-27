@@ -26,10 +26,36 @@ describe("KNOWLEDGE_BASE", () => {
     expect(KNOWLEDGE_BASE).toContain("Быстрый старт");
     expect(KNOWLEDGE_BASE).toContain("Пополнение баланса");
     expect(KNOWLEDGE_BASE).toContain("Byesu Code");
-    expect(KNOWLEDGE_BASE).toContain("Ошибки API");
     expect(KNOWLEDGE_BASE).toContain("Генерация изображений");
     expect(KNOWLEDGE_BASE).toContain("Claude Code");
     expect(KNOWLEDGE_BASE).toContain("insufficient_balance");
+  });
+
+  it("contains correct base URLs from docs.byesu.com", () => {
+    expect(KNOWLEDGE_BASE).toContain("https://byesu.com/v1");
+    expect(KNOWLEDGE_BASE).toContain("https://byesu.com");
+  });
+
+  it("contains Codex CLI required parameters from docs", () => {
+    expect(KNOWLEDGE_BASE).toContain("wire_api");
+    expect(KNOWLEDGE_BASE).toContain("disable_response_storage");
+    expect(KNOWLEDGE_BASE).toContain("model_provider");
+  });
+
+  it("contains current flagship model names", () => {
+    expect(KNOWLEDGE_BASE).toContain("gpt-5.5");
+    expect(KNOWLEDGE_BASE).toContain("claude-opus-4-8");
+    expect(KNOWLEDGE_BASE).toContain("grok-420-fast");
+  });
+
+  it("lists all error codes from docs.byesu.com/errors", () => {
+    expect(KNOWLEDGE_BASE).toContain("401");
+    expect(KNOWLEDGE_BASE).toContain("403");
+    expect(KNOWLEDGE_BASE).toContain("404");
+    expect(KNOWLEDGE_BASE).toContain("429");
+    expect(KNOWLEDGE_BASE).toContain("503");
+    expect(KNOWLEDGE_BASE).toContain("no available channels");
+    expect(KNOWLEDGE_BASE).toContain("model_not_found");
   });
 });
 
