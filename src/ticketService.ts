@@ -259,7 +259,20 @@ export async function ensureThreadAndTicket(
     const topic = await bot.telegram.createForumTopic(config.supportGroupId, provisionalTitle);
     // If createThread fails here, the Telegram topic is an untracked orphan, but the
     // user is not blocked (no DB ticket exists yet). Operational cleanup only.
-    thread = await repo.createThread(user.id, topic.message_thread_id, provisionalTitle);
+    // A unique-constraint violation (23505) means a concurrent request already created
+    // the thread — read the winner's record and continue with it.
+    try {
+      thread = await repo.createThread(user.id, topic.message_thread_id, provisionalTitle);
+    } catch (error) {
+      if ((error as { code?: string }).code !== "23505") {
+        throw error;
+      }
+      const existing = await repo.findThreadByUserId(user.id);
+      if (!existing) {
+        throw error;
+      }
+      thread = existing;
+    }
   } else if (thread.isClosed) {
     try {
       await bot.telegram.reopenForumTopic(config.supportGroupId, thread.messageThreadId);
