@@ -1,6 +1,6 @@
 import type { DbClient } from "./db.js";
 import { generateTicketCode } from "./ticketCode.js";
-import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserStats, UserThreadRecord } from "./types.js";
+import type { AiOutcome, ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserStats, UserThreadRecord } from "./types.js";
 
 function toNumber(value: unknown): number {
   return Number(value);
@@ -203,7 +203,7 @@ export class SupportRepository {
     return result.rows[0] ? mapTicket(result.rows[0]) : null;
   }
 
-  async setTicketStatus(ticketId: number, status: TicketStatus): Promise<TicketRecord | null> {
+  async setTicketStatus(ticketId: number, status: "open" | "in_review"): Promise<TicketRecord | null> {
     const result = await this.db.query(
       "update tickets set status = $2 where id = $1 and status in ('open', 'in_review') and status != $2 returning *",
       [ticketId, status]
@@ -285,12 +285,19 @@ export class SupportRepository {
     await this.db.query("delete from service_cards where ticket_id = $1 and kind = $2", [ticketId, kind]);
   }
 
+  async logAiInteraction(userId: number | null, outcome: AiOutcome, questionLength: number): Promise<void> {
+    await this.db.query(
+      "insert into ai_interactions(user_id, outcome, question_length) values ($1, $2, $3)",
+      [userId, outcome, questionLength]
+    );
+  }
+
   async addMessageLink(input: {
     ticketId: number | null;
     userId: number | null;
     direction: "user_to_support" | "support_to_user";
     sourceChatId: number;
-    sourceMessageId: number;
+    sourceMessageId: number | null;
     targetChatId: number;
     targetMessageId: number;
   }): Promise<void> {
