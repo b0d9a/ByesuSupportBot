@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AiAssistant } from "../src/ai.js";
+import { AiAssistant, SYSTEM_PROMPT } from "../src/ai.js";
 import type { AiConfig } from "../src/config.js";
 import { KNOWLEDGE_BASE } from "../src/knowledgeBase.js";
 import { Logger } from "../src/logger.js";
@@ -80,6 +80,51 @@ describe("AiAssistant", () => {
       choices: [{ message: { content: "not json" } }]
     }));
     expect(await assistant.tryAnswer("q")).toEqual({ confident: false, answer: "" });
+  });
+});
+
+describe("SYSTEM_PROMPT anti-chatbot rules", () => {
+  it("forbids general model knowledge", () => {
+    expect(SYSTEM_PROMPT).toMatch(/НЕ используй общие знания/i);
+  });
+
+  it("explicitly prohibits off-topic categories", () => {
+    expect(SYSTEM_PROMPT).toMatch(/анекдот/i);
+    expect(SYSTEM_PROMPT).toMatch(/погода/i);
+    expect(SYSTEM_PROMPT).toMatch(/политик/i);
+    expect(SYSTEM_PROMPT).toMatch(/перевод/i);
+    expect(SYSTEM_PROMPT).toMatch(/биткоин/i);
+  });
+
+  it("instructs confident=false for prompt injection attempts", () => {
+    expect(SYSTEM_PROMPT).toMatch(/prompt injection/i);
+    expect(SYSTEM_PROMPT).toMatch(/игнорировать правила/i);
+  });
+
+  it("instructs confident=false for account/payment-specific questions", () => {
+    expect(SYSTEM_PROMPT).toMatch(/аккаунт|заказ|платеж/i);
+  });
+
+  it("instructs confident=false when uncertain", () => {
+    expect(SYSTEM_PROMPT).toMatch(/не уверен/i);
+  });
+
+  it("names the documentation sources", () => {
+    expect(SYSTEM_PROMPT).toMatch(/docs\.byesu\.com/);
+    expect(SYSTEM_PROMPT).toMatch(/byesu\.ru\/docs/);
+  });
+
+  it("is used in the model request (smoke-test via mocked call)", async () => {
+    let capturedMessages: unknown[] = [];
+    const assistant = new AiAssistant(enabledConfig, logger);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (assistant as any).client.chat.completions.create = async (params: { messages: unknown[] }) => {
+      capturedMessages = params.messages;
+      return { choices: [{ message: { content: JSON.stringify({ confident: false, answer: "" }) } }] };
+    };
+    await assistant.tryAnswer("тест");
+    const systemMsg = capturedMessages.find((m) => (m as { role: string }).role === "system") as { content: string } | undefined;
+    expect(systemMsg?.content).toContain("НЕ используй общие знания");
   });
 });
 

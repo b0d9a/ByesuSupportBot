@@ -13,7 +13,7 @@ import { SupportRepository } from "./repository.js";
 import { deleteServiceCardMessage, editForumTopicTitle, ensureThreadAndTicket, moderatorTicketKeyboard, postClosedTicketCard, postOpenTicketCard, refreshOpenServiceCard, refreshPinnedCard } from "./ticketService.js";
 import { ticketNumber } from "./ticketCode.js";
 import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
-import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, formatModeratorEscalationContext, formatModeratorNewMessageContext } from "./botUtils.js";
+import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, isOffTopicMessage, formatModeratorEscalationContext, formatModeratorNewMessageContext } from "./botUtils.js";
 
 const lastMessageAt = new Map<number, number>();
 const lastNoticeAt = new Map<number, number>();
@@ -207,7 +207,7 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
       // Only the very first message of a new conversation reaches here, so the AI
       // never intercepts an ongoing exchange with a human agent. On any doubt the
       // assistant returns confident=false and we fall through to escalation.
-      if (deps.ai.enabled && hasText(ctx.message) && !isCommandMessage(ctx.message)) {
+      if (deps.ai.enabled && hasText(ctx.message) && !isCommandMessage(ctx.message) && !isOffTopicMessage(ctx.message.text)) {
         const question = ctx.message.text;
         const aiResult = await deps.ai.tryAnswer(question);
         if (isAiAnswerUsable(aiResult)) {

@@ -47,6 +47,29 @@ export function isAiAnswerUsable(result: AiAnswer): result is { confident: true;
   return result.confident && typeof result.answer === "string" && result.answer.trim().length > 0 && result.answer.length <= AI_ANSWER_MAX_CHARS;
 }
 
+// Patterns that reliably identify off-topic messages not related to Byesu support.
+// Conservative: only block obvious chatbot abuse, never Byesu-related queries.
+const OFF_TOPIC_PATTERNS: RegExp[] = [
+  /анекдот|расскажи.{0,20}(шутк|историю|стих|сказк)/iu,
+  /погод[аеуы]/iu,
+  /президент|премьер.?министр|политик/iu,
+  /переведи|перевод|translate/iu,
+  /биткоин|bitcoin|курс (доллар|евро|btc|eth)/iu,
+  /напиши.{0,30}(скрипт|код|функци|программ|класс|метод)/iu,
+  /игнорир|забудь.{0,20}инструкци|ты теперь|притворись|roleplay|jailbreak/iu,
+  /system prompt|системный промпт|твои правила|твои инструкци/iu,
+  /что ты умеешь|что ты можешь|кто ты|ты (бот|ии|gpt|chatgpt|claude)/iu,
+  /какая сегодня|какой сейчас (год|день|час)/iu,
+];
+
+/**
+ * Returns true when the message is clearly unrelated to Byesu support.
+ * Used as a cheap pre-filter before calling the AI API.
+ */
+export function isOffTopicMessage(text: string): boolean {
+  return OFF_TOPIC_PATTERNS.some((re) => re.test(text));
+}
+
 function truncateField(text: string, budget: number): string {
   if (text.length <= budget) return text;
   return text.slice(0, budget - TRUNCATION_SUFFIX.length) + TRUNCATION_SUFFIX;

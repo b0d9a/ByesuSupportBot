@@ -1,8 +1,12 @@
 /**
- * Full product knowledge base used as the AI assistant's grounding context.
- * Covers both byesu.ru (Byesu Code — balance top-up via promo codes) and
- * docs.byesu.com (Byesu API — multi-provider AI gateway), which together
- * form a single product offering.
+ * Byesu support knowledge base — grounding context for the AI assistant.
+ *
+ * Sources (sole authoritative references):
+ *   - https://docs.byesu.com/
+ *   - https://byesu.ru/docs
+ *
+ * Only include facts that are explicitly present in those two sources.
+ * Do not add product guesses, undocumented model names, or unverified claims.
  */
 export const KNOWLEDGE_BASE = `
 # Byesu — полная документация
