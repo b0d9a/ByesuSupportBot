@@ -5,16 +5,17 @@ describe("FAQ content", () => {
   it("has the expected public sections", () => {
     expect(FAQ_SECTIONS.map((section) => section.id)).toEqual([
       "start",
+      "topup",
       "models",
-      "payments",
       "clients",
+      "media",
       "errors",
       "support"
     ]);
   });
 
   it("finds a section by id", () => {
-    expect(findFaqSection("payments")?.title).toBe("Оплата");
+    expect(findFaqSection("topup")?.title).toBe("Пополнение баланса");
     expect(findFaqSection("missing")).toBeNull();
   });
 

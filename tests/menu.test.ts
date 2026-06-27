@@ -71,9 +71,10 @@ describe("faqListKeyboard", () => {
     const buttons = faqListKeyboard().reply_markup.inline_keyboard.flat();
     const cbData = buttons.map((b) => ("callback_data" in b ? b.callback_data : null));
     expect(cbData).toContain("faq:section:start");
+    expect(cbData).toContain("faq:section:topup");
     expect(cbData).toContain("faq:section:models");
-    expect(cbData).toContain("faq:section:payments");
     expect(cbData).toContain("faq:section:clients");
+    expect(cbData).toContain("faq:section:media");
     expect(cbData).toContain("faq:section:errors");
     expect(cbData).toContain("faq:section:support");
   });
