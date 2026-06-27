@@ -44,3 +44,5 @@ export interface UserStats {
   openCount: number;
   closedCount: number;
 }
+
+export type AiOutcome = "resolved" | "escalated" | "not_confident";
