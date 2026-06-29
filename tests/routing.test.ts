@@ -6,8 +6,8 @@
  * All assertions are deterministic.
  */
 import { describe, expect, it } from "vitest";
-import { getProblemAutoAnswer, PROBLEM_503_AUTO_ANSWER, PROBLEM_401_AUTO_ANSWER } from "../src/ticketAutoReply.js";
-import { isOffTopicMessage, isHumanOnlySupportMessage, isAiAnswerUsable } from "../src/botUtils.js";
+import { getProblemAutoAnswer, PROBLEM_503_AUTO_ANSWER, PROBLEM_401_AUTO_ANSWER, get503AutoAnswer, get401AutoAnswer, getPaymentAcknowledgment } from "../src/ticketAutoReply.js";
+import { isOffTopicMessage, isHumanOnlySupportMessage, isAiAnswerUsable, detectSupportLanguage } from "../src/botUtils.js";
 import { KNOWLEDGE_BASE } from "../src/knowledgeBase.js";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,9 @@ describe("Problem ticket — 503 / stream disconnected / capacity", () => {
       const result = getProblemAutoAnswer(msg);
       expect(result.matched).toBe(true);
       if (result.matched) {
-        expect(result.text).toBe(PROBLEM_503_AUTO_ANSWER);
+        // Reply must be in the correct language; always equals one of the two variants.
+        const expected = get503AutoAnswer(detectSupportLanguage(msg));
+        expect(result.text).toBe(expected);
       }
     });
   }
@@ -85,7 +87,8 @@ describe("Problem ticket — 401 / invalid token", () => {
       const result = getProblemAutoAnswer(msg);
       expect(result.matched).toBe(true);
       if (result.matched) {
-        expect(result.text).toBe(PROBLEM_401_AUTO_ANSWER);
+        const expected = get401AutoAnswer(detectSupportLanguage(msg));
+        expect(result.text).toBe(expected);
       }
     });
   }
@@ -320,5 +323,116 @@ describe("403 — conservative treatment", () => {
     expect(idx403).toBeGreaterThan(-1);
     const entry = KNOWLEDGE_BASE.slice(idx403, idx403 + 300);
     expect(entry).toMatch(/модел|групп/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Language detection — detectSupportLanguage
+// ---------------------------------------------------------------------------
+describe("detectSupportLanguage", () => {
+  it("detects pure English text as 'en'", () => {
+    expect(detectSupportLanguage("unexpected status 502 Bad Gateway: selected model is at capacity")).toBe("en");
+  });
+
+  it("detects pure Russian text as 'ru'", () => {
+    expect(detectSupportLanguage("получил ошибку 503 при запросе")).toBe("ru");
+  });
+
+  it("detects mixed text as the dominant language (Latin > Cyrillic → en)", () => {
+    // "ошибка:" = 6 Cyr, "selected model is at capacity" = 26 Lat
+    expect(detectSupportLanguage("ошибка: selected model is at capacity")).toBe("en");
+  });
+
+  it("detects mixed text as the dominant language (Cyrillic > Latin → ru)", () => {
+    // "ошибка при запросе" = 15 Cyr, "Invalid token" = 12 Lat
+    expect(detectSupportLanguage("ошибка: Invalid token при запросе")).toBe("ru");
+  });
+
+  it("falls back to 'ru' for digit-only text", () => {
+    expect(detectSupportLanguage("503")).toBe("ru");
+  });
+
+  it("respects explicit fallback when no letters found", () => {
+    expect(detectSupportLanguage("502", "en")).toBe("en");
+  });
+
+  it("returns 'ru' when Cyrillic equals Latin", () => {
+    // 3 Cyr vs 3 Lat → ru (tie goes to fallback)
+    expect(detectSupportLanguage("абвabc")).toBe("ru");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Bilingual auto-replies — language matches user's message
+// ---------------------------------------------------------------------------
+describe("Bilingual auto-replies", () => {
+  it("English 502/capacity message gets English auto-reply", () => {
+    const msg = "unexpected status 502 Bad Gateway: selected model is at capacity";
+    const result = getProblemAutoAnswer(msg);
+    expect(result.matched).toBe(true);
+    if (result.matched) {
+      expect(result.text).toBe(get503AutoAnswer("en"));
+      expect(result.text).toMatch(/overloaded|capacity/i);
+    }
+  });
+
+  it("Russian 503/capacity message gets Russian auto-reply", () => {
+    const msg = "ошибка 503 при запросе";
+    const result = getProblemAutoAnswer(msg);
+    expect(result.matched).toBe(true);
+    if (result.matched) {
+      expect(result.text).toBe(get503AutoAnswer("ru"));
+      expect(result.text).toMatch(/перегруз/i);
+    }
+  });
+
+  it("English 401/invalid token message gets English auto-reply", () => {
+    const msg = "getting 401 Unauthorized on every request";
+    const result = getProblemAutoAnswer(msg);
+    expect(result.matched).toBe(true);
+    if (result.matched) {
+      expect(result.text).toBe(get401AutoAnswer("en"));
+      expect(result.text).toMatch(/key not accepted|not accepted/i);
+    }
+  });
+
+  it("Russian 401 message gets Russian auto-reply", () => {
+    const msg = "ошибка 401 при каждом запросе";
+    const result = getProblemAutoAnswer(msg);
+    expect(result.matched).toBe(true);
+    if (result.matched) {
+      expect(result.text).toBe(get401AutoAnswer("ru"));
+      expect(result.text).toMatch(/ключ не принят/i);
+    }
+  });
+
+  it("English payment/USDT message gets English payment acknowledgment", () => {
+    const ack = getPaymentAcknowledgment("en");
+    expect(ack).toMatch(/order number|order/i);
+    expect(ack).toMatch(/telegram username/i);
+  });
+
+  it("Russian payment message gets Russian payment acknowledgment", () => {
+    const ack = getPaymentAcknowledgment("ru");
+    expect(ack).toContain("номер заказа");
+    expect(ack).toContain("Telegram username");
+  });
+
+  it("English auto-reply does not contain Russian-only words", () => {
+    const en503 = get503AutoAnswer("en");
+    expect(en503).not.toMatch(/перегруз|повтор|переключ/i);
+  });
+
+  it("Russian auto-reply does not contain English-only sentences", () => {
+    const ru503 = get503AutoAnswer("ru");
+    expect(ru503).not.toMatch(/\boverloaded\b|\bretry\b|\bswitch\b/i);
+  });
+
+  it("PROBLEM_503_AUTO_ANSWER constant is the Russian variant (backwards compat)", () => {
+    expect(PROBLEM_503_AUTO_ANSWER).toBe(get503AutoAnswer("ru"));
+  });
+
+  it("PROBLEM_401_AUTO_ANSWER constant is the Russian variant (backwards compat)", () => {
+    expect(PROBLEM_401_AUTO_ANSWER).toBe(get401AutoAnswer("ru"));
   });
 });

@@ -3,8 +3,11 @@ import {
   PAYMENT_ACKNOWLEDGMENT,
   PROBLEM_503_AUTO_ANSWER,
   PROBLEM_401_AUTO_ANSWER,
-  getProblemAutoAnswer
+  getProblemAutoAnswer,
+  get503AutoAnswer,
+  get401AutoAnswer,
 } from "../src/ticketAutoReply.js";
+import { detectSupportLanguage } from "../src/botUtils.js";
 
 describe("PAYMENT_ACKNOWLEDGMENT", () => {
   it("mentions Telegram username, order number, amount, and time", () => {
@@ -42,7 +45,7 @@ describe("getProblemAutoAnswer — 503 patterns", () => {
       const result = getProblemAutoAnswer(msg);
       expect(result.matched).toBe(true);
       if (result.matched) {
-        expect(result.text).toBe(PROBLEM_503_AUTO_ANSWER);
+        expect(result.text).toBe(get503AutoAnswer(detectSupportLanguage(msg)));
       }
     });
   }
@@ -73,7 +76,7 @@ describe("getProblemAutoAnswer — 401 patterns", () => {
       const result = getProblemAutoAnswer(msg);
       expect(result.matched).toBe(true);
       if (result.matched) {
-        expect(result.text).toBe(PROBLEM_401_AUTO_ANSWER);
+        expect(result.text).toBe(get401AutoAnswer(detectSupportLanguage(msg)));
       }
     });
   }

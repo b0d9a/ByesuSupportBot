@@ -77,6 +77,27 @@ describe("KNOWLEDGE_BASE", () => {
     expect(KNOWLEDGE_BASE).toContain('wire_api = "responses"');
   });
 
+  it("Codex config uses [model_providers.OpenAI] section (not flat top-level base_url)", () => {
+    expect(KNOWLEDGE_BASE).toContain("[model_providers.OpenAI]");
+    // base_url must appear inside the provider block, not promoted as a standalone top-level setting
+    const codexSection = KNOWLEDGE_BASE.slice(
+      KNOWLEDGE_BASE.indexOf("### Codex CLI"),
+      KNOWLEDGE_BASE.indexOf("### Claude Code CLI")
+    );
+    expect(codexSection).toContain("[model_providers.OpenAI]");
+    expect(codexSection).toContain('base_url = "https://byesu.com/v1"');
+    expect(codexSection).toContain('wire_api = "responses"');
+  });
+
+  it("Codex auth.json uses OPENAI_API_KEY", () => {
+    const codexSection = KNOWLEDGE_BASE.slice(
+      KNOWLEDGE_BASE.indexOf("### Codex CLI"),
+      KNOWLEDGE_BASE.indexOf("### Claude Code CLI")
+    );
+    expect(codexSection).toContain("OPENAI_API_KEY");
+    expect(codexSection).toContain("auth.json");
+  });
+
   it("contains Claude Code base URL without /v1", () => {
     expect(KNOWLEDGE_BASE).toContain("https://byesu.com (без /v1");
     expect(KNOWLEDGE_BASE).toContain("Claude Code");
