@@ -11,6 +11,7 @@ ChatExport_*/
 
 *.dump
 *.dump.sha256
+*.zip
 *.log
 
 .mcp.json
