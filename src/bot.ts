@@ -14,6 +14,7 @@ import { deleteServiceCardMessage, editForumTopicTitle, ensureThreadAndTicket, m
 import { ticketNumber } from "./ticketCode.js";
 import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
 import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, isOffTopicMessage, formatModeratorEscalationContext, formatModeratorNewMessageContext } from "./botUtils.js";
+import { PAYMENT_ACKNOWLEDGMENT, getProblemAutoAnswer } from "./ticketAutoReply.js";
 
 const lastMessageAt = new Map<number, number>();
 const lastNoticeAt = new Map<number, number>();
@@ -231,6 +232,15 @@ async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<vo
       thread = created.thread;
       pendingQuestions.delete(telegramUserId);
       await ctx.reply(`Обращение ${ticketNumber(ticket)} открыто. Мы ответим здесь.`);
+
+      if (selectedCategory === "payment") {
+        await ctx.reply(PAYMENT_ACKNOWLEDGMENT);
+      } else if (selectedCategory === "problem" && hasText(ctx.message)) {
+        const autoReply = getProblemAutoAnswer(ctx.message.text);
+        if (autoReply.matched) {
+          await ctx.reply(autoReply.text);
+        }
+      }
     }
 
     if (!thread) {
@@ -408,6 +418,10 @@ async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
   pendingQuestions.delete(telegramUserId);
 
   await ctx.reply(`Обращение ${ticketNumber(ticket)} открыто. Сейчас подключится оператор — ответим здесь.`);
+
+  if (selectedCategory === "payment") {
+    await ctx.reply(PAYMENT_ACKNOWLEDGMENT);
+  }
 }
 
 async function setupServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void> {

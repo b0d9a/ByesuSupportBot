@@ -51,13 +51,13 @@ describe("statusEmojiId", () => {
 
 describe("formatTopicTitle", () => {
   it("returns title without status emoji prefix", () => {
-    expect(formatTopicTitle("A1B2C3", "problem", user)).toBe("#A1B2C3 · Проблема · @client");
+    expect(formatTopicTitle("A1B2C3", "problem", user)).toBe("#A1B2C3 · Ошибка API / техническая проблема · @client");
   });
 
   it("includes ticket code, category label and username regardless of status", () => {
-    expect(formatTopicTitle("A1B2C3", "problem", user, "open")).toBe("#A1B2C3 · Проблема · @client");
-    expect(formatTopicTitle("A1B2C3", "problem", user, "in_review")).toBe("#A1B2C3 · Проблема · @client");
-    expect(formatTopicTitle("A1B2C3", "problem", user, "closed")).toBe("#A1B2C3 · Проблема · @client");
+    expect(formatTopicTitle("A1B2C3", "problem", user, "open")).toBe("#A1B2C3 · Ошибка API / техническая проблема · @client");
+    expect(formatTopicTitle("A1B2C3", "problem", user, "in_review")).toBe("#A1B2C3 · Ошибка API / техническая проблема · @client");
+    expect(formatTopicTitle("A1B2C3", "problem", user, "closed")).toBe("#A1B2C3 · Ошибка API / техническая проблема · @client");
   });
 
   it("keeps Telegram forum topic title within the API limit", () => {

@@ -1,10 +1,10 @@
 import { Markup } from "telegraf";
 
 export const CATEGORIES = [
-  { code: "question", label: "Вопрос" },
-  { code: "problem", label: "Проблема" },
-  { code: "payment", label: "Оплата" },
-  { code: "other", label: "Другое" }
+  { code: "payment", label: "Оплата / промокод" },
+  { code: "problem", label: "Ошибка API / техническая проблема" },
+  { code: "question", label: "Вопрос / настройка" },
+  { code: "other", label: "Другое (не API и не оплата)" }
 ] as const;
 
 export type CategoryCode = (typeof CATEGORIES)[number]["code"];
