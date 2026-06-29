@@ -15,7 +15,7 @@ describe("FAQ content", () => {
   });
 
   it("finds a section by id", () => {
-    expect(findFaqSection("topup")?.title).toBe("Пополнение баланса");
+    expect(findFaqSection("topup")?.title).toBe("Оплата и баланс");
     expect(findFaqSection("missing")).toBeNull();
   });
 
