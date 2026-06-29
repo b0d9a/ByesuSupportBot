@@ -86,6 +86,7 @@ const OFF_TOPIC_PATTERNS: RegExp[] = [
 
 const HUMAN_ONLY_SUPPORT_PATTERNS: RegExp[] = [
   // Payment/order/account balance issues require operator lookup.
+  /\b(402|insufficient_quota|insufficient_balance)\b/iu,
   /(плат[её]ж|оплат[аиыл]|пополнил|пополнение|деп(озит)?).{0,80}(не\s+(приш[её]л|зачисл|появил)|не\s+получил|висит|не\s+прош[её]л)/iu,
   /(баланс|деньги|средств[ао]).{0,80}(не\s+(приш[её]л|зачисл|появил)|исчез|обнули|снял|списал|пропал|меньше)/iu,
   /(промокод|код).{0,60}(не\s+(приш[её]л|подходит|действител)|invalid|недействител)/iu,

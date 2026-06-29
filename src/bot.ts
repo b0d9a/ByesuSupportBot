@@ -51,7 +51,7 @@ interface BotDeps {
   logger: Logger;
 }
 
-interface RuntimeDeps extends BotDeps {
+export interface RuntimeDeps extends BotDeps {
   bot: Telegraf;
   ai: AiAssistant;
 }
@@ -144,7 +144,7 @@ async function repairStaleThread(
   return updated;
 }
 
-async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<void> {
+export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<void> {
   if (!ctx.from || !ctx.message || ctx.chat?.type !== "private") {
     return;
   }

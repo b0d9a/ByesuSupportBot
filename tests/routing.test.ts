@@ -117,6 +117,11 @@ describe("Problem ticket — 401 / invalid token", () => {
   it("KB covers insufficient_quota separately from insufficient_balance", () => {
     expect(KNOWLEDGE_BASE).toContain("insufficient_quota");
   });
+
+  it("insufficient_quota is blocked from AI and routed to human", () => {
+    expect(isHumanOnlySupportMessage("ошибка insufficient_quota при запросе")).toBe(true);
+    expect(isHumanOnlySupportMessage("API Error: 402 insufficient_quota")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
