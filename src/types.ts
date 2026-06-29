@@ -13,6 +13,7 @@ export interface UserRecord {
   firstName: string | null;
   lastName: string | null;
   languageCode: string | null;
+  uiLanguageOverride: string | null;
   firstSeenAt: Date;
   lastSeenAt: Date;
 }
@@ -46,3 +47,35 @@ export interface UserStats {
 }
 
 export type AiOutcome = "answered" | "resolved" | "escalated" | "not_confident";
+
+export type SupportMessageDirection = "user_to_support" | "support_to_user" | "bot_to_user" | "bot_to_support";
+export type SupportMessageSenderRole = "user" | "operator" | "bot" | "system";
+
+export interface SupportMessageRecord {
+  id: number;
+  ticketId: number | null;
+  userId: number | null;
+  direction: SupportMessageDirection;
+  senderRole: SupportMessageSenderRole;
+  telegramChatId: number | null;
+  telegramMessageId: number | null;
+  messageThreadId: number | null;
+  text: string | null;
+  textRedacted: string | null;
+  hasText: boolean;
+  createdAt: Date;
+}
+
+export type FaqCandidateStatus = "pending" | "approved" | "rejected";
+
+export interface FaqCandidateRecord {
+  id: number;
+  sourceTicketId: number | null;
+  question: string;
+  proposedAnswer: string;
+  evidenceMessageIds: number[];
+  status: FaqCandidateStatus;
+  reviewerNote: string | null;
+  createdAt: Date;
+  reviewedAt: Date | null;
+}

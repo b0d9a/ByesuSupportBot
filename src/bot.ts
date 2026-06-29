@@ -13,8 +13,10 @@ import { SupportRepository } from "./repository.js";
 import { deleteServiceCardMessage, editForumTopicTitle, ensureThreadAndTicket, moderatorTicketKeyboard, postClosedTicketCard, postOpenTicketCard, refreshOpenServiceCard, refreshPinnedCard } from "./ticketService.js";
 import { ticketNumber } from "./ticketCode.js";
 import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
-import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, isOffTopicMessage, isHumanOnlySupportMessage, formatModeratorEscalationContext, formatModeratorNewMessageContext } from "./botUtils.js";
-import { PAYMENT_ACKNOWLEDGMENT, getProblemAutoAnswer } from "./ticketAutoReply.js";
+import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, type SupportLanguage, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, isOffTopicMessage, isHumanOnlySupportMessage, formatModeratorEscalationContext, formatModeratorNewMessageContext, formatModeratorQuestionMessage, formatModeratorBotAnswerMessage, formatModeratorFollowUpMessage, detectSupportLanguage } from "./botUtils.js";
+import { getPaymentAcknowledgment, getProblemAutoAnswer } from "./ticketAutoReply.js";
+import { t, uiLanguageFromTelegram, uiLanguageFromUser, LANGUAGE_SELECTOR_PROMPT } from "./i18n.js";
+import { redactSupportText } from "./redaction.js";
 
 const lastMessageAt = new Map<number, number>();
 const lastNoticeAt = new Map<number, number>();
@@ -34,15 +36,68 @@ setInterval(pruneRateLimitMaps, RATE_LIMIT_TTL_MS).unref();
 // Last question the user asked while the AI was answering, kept so the
 // "talk to a human" button can forward it to moderators verbatim. In-memory and
 // short-lived by design — a forgotten entry just means the user re-sends.
-const pendingQuestions = new Map<number, PendingQuestion>();
+// Exported for testing only — do not mutate outside tests.
+export const pendingQuestions = new Map<number, PendingQuestion>();
 
 setInterval(() => pruneStalePendingQuestions(pendingQuestions, Date.now()), PENDING_QUESTION_TTL_MS).unref();
 
-function aiAnswerKeyboard() {
+async function resolveUiLang(pool: pg.Pool, telegramUserId: number, telegramLang?: string | null): Promise<SupportLanguage> {
+  const repo = new SupportRepository(pool);
+  const override = await repo.getUiLanguageOverride(telegramUserId);
+  return uiLanguageFromUser(override, telegramLang);
+}
+
+function languageKeyboard(lang: SupportLanguage = "ru") {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("Это помогло ✅", "ai:resolved")],
-    [Markup.button.callback("Нужен человек 👤", "ai:human")]
+    [Markup.button.callback("🇷🇺 Русский", "language:ru")],
+    [Markup.button.callback("🇬🇧 English", "language:en")],
+    [Markup.button.callback("🇨🇳 中文", "language:zh")],
+    [Markup.button.callback(t(lang, "btnBack"), "menu:start")]
   ]);
+}
+
+// Language selector without a Back button — used for first-time onboarding when
+// no main menu has been shown yet.
+function languageSelectorKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("🇷🇺 Русский", "language:ru")],
+    [Markup.button.callback("🇬🇧 English", "language:en")],
+    [Markup.button.callback("🇨🇳 中文", "language:zh")]
+  ]);
+}
+
+// Returns null and sends language prompt if the user has no ui_language_override.
+// Call at the start of private-message handlers; bail out when null is returned.
+async function requireUiLanguage(ctx: Context, pool: pg.Pool, telegramUserId: number): Promise<SupportLanguage | null> {
+  const repo = new SupportRepository(pool);
+  const override = await repo.getUiLanguageOverride(telegramUserId);
+  if (override === "ru" || override === "en" || override === "zh") {
+    return override;
+  }
+  await ctx.reply(LANGUAGE_SELECTOR_PROMPT, languageSelectorKeyboard());
+  return null;
+}
+
+function aiAnswerKeyboard(lang: SupportLanguage = "ru") {
+  const labels: Record<SupportLanguage, [string, string]> = {
+    ru: ["Это помогло ✅", "Нужен человек 👤"],
+    en: ["This helped ✅", "Need a human 👤"],
+    zh: ["已解决 ✅", "需要人工 👤"],
+  };
+  const [resolved, human] = labels[lang];
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(resolved, "ai:resolved")],
+    [Markup.button.callback(human, "ai:human")]
+  ]);
+}
+
+function formatSupportBotAnswer(answer: string, lang: SupportLanguage): string {
+  const greetings: Record<SupportLanguage, string> = {
+    ru: "Здравствуйте, это помощник поддержки ByesuSupportBot.",
+    en: "Hello, this is the ByesuSupportBot support assistant.",
+    zh: "您好，这里是 ByesuSupportBot 支持助手。",
+  };
+  return `${greetings[lang]}\n\n${answer}`;
 }
 
 interface BotDeps {
@@ -151,11 +206,15 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
 
   const telegramUserId = ctx.from.id;
 
+  const uiLangOrNull = await requireUiLanguage(ctx, deps.pool, telegramUserId);
+  if (!uiLangOrNull) return;
+  const uiLang = uiLangOrNull;
+
   const now = Date.now();
   if (isRateLimited(lastMessageAt, telegramUserId, now)) {
     if (shouldSendRateLimitNotice(lastNoticeAt, telegramUserId, now)) {
       lastNoticeAt.set(telegramUserId, now);
-      await ctx.reply("Пожалуйста, не отправляйте сообщения так быстро. Подождите немного и попробуйте снова.");
+      await ctx.reply(t(uiLang, "rateLimitNotice"));
     }
     return;
   }
@@ -173,21 +232,20 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
         if (selectedCategory) {
           await repo.clearSelectedCategory(user.telegramUserId);
         }
-        await ctx.reply(mainMenuText(), mainMenuKeyboard());
+        await ctx.reply(mainMenuText(uiLang), mainMenuKeyboard(uiLang));
         return;
       }
 
-      // If a pending AI session exists and the user sends a new message instead of
+      // If a pending bot/AI session exists and the user sends a new message instead of
       // clicking a button, treat it as implicit escalation to a human.
       const existingPending = pendingQuestions.get(telegramUserId);
       if (existingPending && hasText(ctx.message) && !isCommandMessage(ctx.message)) {
         const newText = ctx.message.text;
         const { ticket: pendingTicket, thread: pendingThread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
-        const contextMsg = formatModeratorNewMessageContext(existingPending.text, existingPending.aiAnswer, newText);
-        const sent = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, contextMsg, {
+        // Send question, bot answer, and follow-up as separate messages.
+        const sentQ = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorQuestionMessage(existingPending.text), {
           message_thread_id: pendingThread.messageThreadId
         });
-        pendingQuestions.delete(telegramUserId);
         await repo.addMessageLink({
           ticketId: pendingTicket.id,
           userId: user.id,
@@ -195,12 +253,37 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
           sourceChatId: telegramUserId,
           sourceMessageId: null,
           targetChatId: deps.config.supportGroupId,
-          targetMessageId: sent.message_id
+          targetMessageId: sentQ.message_id
         });
+        const sentAnswer = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorBotAnswerMessage(existingPending.aiAnswer), {
+          message_thread_id: pendingThread.messageThreadId
+        });
+        const sentFollowUp = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorFollowUpMessage(newText), {
+          message_thread_id: pendingThread.messageThreadId
+        });
+        pendingQuestions.delete(telegramUserId);
         repo.logAiInteraction(user.id, "escalated", existingPending.text.length).catch((err) => {
           deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
         });
-        await ctx.reply(`Обращение ${ticketNumber(pendingTicket)} открыто. Сейчас подключится оператор — ответим здесь.`);
+        repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: existingPending.text, textRedacted: redactSupportText(existingPending.text) }).catch(() => {});
+        repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", messageThreadId: pendingThread.messageThreadId, telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, text: existingPending.aiAnswer, textRedacted: redactSupportText(existingPending.aiAnswer) }).catch(() => {});
+        repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentFollowUp.message_id, messageThreadId: pendingThread.messageThreadId, text: newText, textRedacted: redactSupportText(newText) }).catch(() => {});
+        await ctx.reply(t(uiLang, "ticketOpenedOperator", ticketNumber(pendingTicket)));
+        return;
+      }
+
+      // Deterministic problem auto-answer: respond first, open ticket only if user asks for human.
+      // Does not call AI provider — uses KB-grounded templates.
+      const problemAutoAnswer = selectedCategory === "problem" && hasText(ctx.message) ? getProblemAutoAnswer(ctx.message.text) : { matched: false as const };
+
+      if (problemAutoAnswer.matched && hasText(ctx.message)) {
+        const question = ctx.message.text;
+        const lang = detectSupportLanguage(question);
+        const wrapped = formatSupportBotAnswer(problemAutoAnswer.text, lang);
+        pendingQuestions.set(telegramUserId, { text: question, aiAnswer: problemAutoAnswer.text, at: Date.now() });
+        const replied = await ctx.reply(wrapped, aiAnswerKeyboard(lang));
+        repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: hasText(ctx.message) ? ctx.message.message_id : null, text: question, textRedacted: redactSupportText(question) }).catch(() => {});
+        repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: replied.message_id, text: wrapped, textRedacted: redactSupportText(wrapped) }).catch(() => {});
         return;
       }
 
@@ -212,13 +295,17 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
         const question = ctx.message.text;
         const aiResult = await deps.ai.tryAnswer(question);
         if (isAiAnswerUsable(aiResult)) {
+          const lang = detectSupportLanguage(question);
+          const wrapped = formatSupportBotAnswer(aiResult.answer, lang);
           // Keep the category selection and remember the question so "talk to a
           // human" can escalate without asking the user to retype it.
           pendingQuestions.set(telegramUserId, { text: question, aiAnswer: aiResult.answer, at: Date.now() });
           repo.logAiInteraction(user.id, "answered", question.length).catch((err) => {
             deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
           });
-          await ctx.reply(aiResult.answer, aiAnswerKeyboard());
+          const aiReplied = await ctx.reply(wrapped, aiAnswerKeyboard(lang));
+          repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: hasText(ctx.message) ? ctx.message.message_id : null, text: question, textRedacted: redactSupportText(question) }).catch(() => {});
+          repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: aiReplied.message_id, text: wrapped, textRedacted: redactSupportText(wrapped) }).catch(() => {});
           return;
         }
         // AI was enabled but not confident — log before falling through to human.
@@ -231,21 +318,23 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
       ticket = created.ticket;
       thread = created.thread;
       pendingQuestions.delete(telegramUserId);
-      await ctx.reply(`Обращение ${ticketNumber(ticket)} открыто. Мы ответим здесь.`);
+      const ticketOpenedReply = await ctx.reply(t(uiLang, "ticketOpened", ticketNumber(ticket)));
+      if (hasText(ctx.message)) {
+        repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: ctx.message.message_id, text: ctx.message.text, textRedacted: redactSupportText(ctx.message.text) }).catch(() => {});
+      }
+      repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "bot_to_user", senderRole: "system", telegramChatId: telegramUserId, telegramMessageId: ticketOpenedReply.message_id, text: t(uiLang, "ticketOpened", ticketNumber(ticket)), textRedacted: t(uiLang, "ticketOpened", ticketNumber(ticket)) }).catch(() => {});
 
       if (selectedCategory === "payment") {
-        await ctx.reply(PAYMENT_ACKNOWLEDGMENT);
-      } else if (selectedCategory === "problem" && hasText(ctx.message)) {
-        const autoReply = getProblemAutoAnswer(ctx.message.text);
-        if (autoReply.matched) {
-          await ctx.reply(autoReply.text);
-        }
+        const lang = hasText(ctx.message) ? detectSupportLanguage(ctx.message.text) : "ru";
+        const paymentAckText = getPaymentAcknowledgment(lang);
+        const paymentAckReply = await ctx.reply(paymentAckText);
+        repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: paymentAckReply.message_id, text: paymentAckText, textRedacted: paymentAckText }).catch(() => {});
       }
     }
 
     if (!thread) {
       deps.logger.error("Active ticket has no user thread", { ticketId: ticket.id, userId: user.id });
-      await ctx.reply("Не удалось найти топик обращения. Сообщение не отправлено, администратор уже видит ошибку в логах.");
+      await ctx.reply(t(uiLang, "threadMissing"));
       return;
     }
 
@@ -279,6 +368,9 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
       targetChatId: deps.config.supportGroupId,
       targetMessageId: copied.message_id
     });
+    if (hasText(ctx.message)) {
+      repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: ctx.chat.id, telegramMessageId: ctx.message.message_id, messageThreadId: activeThread.messageThreadId, text: ctx.message.text, textRedacted: redactSupportText(ctx.message.text) }).catch(() => {});
+    }
   } catch (error) {
     deps.logger.error("handlePrivateMessage failed", {
       operation: "handlePrivateMessage",
@@ -286,7 +378,7 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
       error
     });
     try {
-      await ctx.reply("Не удалось обработать сообщение. Попробуйте ещё раз.");
+      await ctx.reply(t(uiLang, "handleError"));
     } catch {
       // If the reply itself fails there is nothing more we can do.
     }
@@ -337,6 +429,10 @@ async function handleSupportTopicMessage(ctx: Context, deps: RuntimeDeps): Promi
       targetChatId: user.telegramUserId,
       targetMessageId: copied.message_id
     });
+    const opText = "text" in ctx.message ? (ctx.message as { text?: string }).text ?? null : null;
+    if (opText) {
+      repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "support_to_user", senderRole: "operator", telegramChatId: deps.config.supportGroupId, telegramMessageId: ctx.message.message_id, messageThreadId, text: opText, textRedacted: redactSupportText(opText) }).catch(() => {});
+    }
   } catch (error) {
     const isBotBlocked =
       (error as { code?: number }).code === 403 ||
@@ -371,18 +467,19 @@ async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
 
   const repo = new SupportRepository(deps.pool);
   const user = await repo.upsertUser(telegramUserInput(ctx.from));
+  const uiLang = uiLanguageFromUser(user.uiLanguageOverride, ctx.from.language_code);
 
   // If a ticket already exists (e.g. double tap), just confirm — the user's
   // messages are already routed to the topic.
   const existing = await repo.getActiveTicket(user.id);
   if (existing) {
-    await ctx.reply(`Обращение ${ticketNumber(existing)} уже открыто. Напишите сюда, и мы продолжим.`);
+    await ctx.reply(t(uiLang, "ticketAlreadyOpen", ticketNumber(existing)));
     return;
   }
 
   const selectedCategory = await repo.getSelectedCategory(user.telegramUserId);
   if (!selectedCategory || !isCategoryCode(selectedCategory)) {
-    await ctx.reply(mainMenuText(), mainMenuKeyboard());
+    await ctx.reply(mainMenuText(uiLang), mainMenuKeyboard(uiLang));
     return;
   }
 
@@ -392,15 +489,15 @@ async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
   // than opening a blank ticket that gives the moderator no context.
   const pending = pendingQuestions.get(telegramUserId);
   if (!pending?.text) {
-    await ctx.reply("Сессия истекла — пожалуйста, напишите ваш вопрос ещё раз, и мы сразу передадим его оператору.");
+    await ctx.reply(t(uiLang, "sessionExpired"));
     return;
   }
 
   const { ticket, thread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
 
-  // Forward the original question and AI answer so the moderator has full context.
-  const contextMsg = formatModeratorEscalationContext(pending.text, pending.aiAnswer);
-  const sent = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, contextMsg, {
+  // Send original question and bot answer as separate messages so moderators
+  // can read them independently.
+  const sentQ = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorQuestionMessage(pending.text), {
     message_thread_id: thread.messageThreadId
   });
   await repo.addMessageLink({
@@ -410,18 +507,19 @@ async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
     sourceChatId: telegramUserId,
     sourceMessageId: null,
     targetChatId: deps.config.supportGroupId,
-    targetMessageId: sent.message_id
+    targetMessageId: sentQ.message_id
+  });
+  const sentAnswer = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorBotAnswerMessage(pending.aiAnswer), {
+    message_thread_id: thread.messageThreadId
   });
   repo.logAiInteraction(user.id, "escalated", pending.text.length).catch((err) => {
     deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
   });
+  repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: pending.text, textRedacted: redactSupportText(pending.text) }).catch(() => {});
+  repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, messageThreadId: thread.messageThreadId, text: pending.aiAnswer, textRedacted: redactSupportText(pending.aiAnswer) }).catch(() => {});
   pendingQuestions.delete(telegramUserId);
 
-  await ctx.reply(`Обращение ${ticketNumber(ticket)} открыто. Сейчас подключится оператор — ответим здесь.`);
-
-  if (selectedCategory === "payment") {
-    await ctx.reply(PAYMENT_ACKNOWLEDGMENT);
-  }
+  await ctx.reply(t(uiLang, "ticketOpenedOperator", ticketNumber(ticket)));
 }
 
 async function setupServiceTopics(ctx: Context, deps: RuntimeDeps): Promise<void> {
@@ -646,38 +744,73 @@ export function createBot(deps: BotDeps): Telegraf {
     if (!ctx.from || ctx.chat.type !== "private") {
       return;
     }
+    pendingQuestions.delete(ctx.from.id);
     const repo = new SupportRepository(deps.pool);
     await repo.upsertUser(telegramUserInput(ctx.from));
-    await ctx.reply(mainMenuText(), mainMenuKeyboard());
+    const uiLang = await requireUiLanguage(ctx, deps.pool, ctx.from.id);
+    if (!uiLang) return;
+    await ctx.reply(mainMenuText(uiLang), mainMenuKeyboard(uiLang));
   });
 
   bot.command("setup", async (ctx) => setupServiceTopics(ctx, fullDeps));
   bot.command("setup_reset", async (ctx) => resetServiceTopics(ctx, fullDeps));
   bot.command("faq", async (ctx) => {
-    if (ctx.chat.type !== "private") return;
-    await ctx.reply(faqListText(), faqListKeyboard());
+    if (ctx.chat.type !== "private" || !ctx.from) return;
+    const uiLang = await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code);
+    await ctx.reply(faqListText(uiLang), faqListKeyboard(uiLang));
   });
   bot.command("new", async (ctx) => {
     if (!ctx.from || ctx.chat.type !== "private") return;
-    await ctx.reply("Выберите тип обращения.", categoryKeyboard({ back: true }));
+    const uiLang = await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code);
+    await ctx.reply(t(uiLang, "chooseCategoryPrompt"), categoryKeyboard({ back: true, lang: uiLang }));
+  });
+  bot.command("language", async (ctx) => {
+    if (!ctx.from || ctx.chat.type !== "private") return;
+    const uiLang = await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code);
+    await ctx.reply(t(uiLang, "languagePrompt"), languageKeyboard(uiLang));
   });
 
   bot.action("menu:start", async (ctx) => {
     if (!(await answerPrivateOnly(ctx))) return;
+    if (ctx.from) pendingQuestions.delete(ctx.from.id);
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
     await ctx.answerCbQuery();
-    await ctx.editMessageText(mainMenuText(), mainMenuKeyboard());
+    await ctx.editMessageText(mainMenuText(uiLang), mainMenuKeyboard(uiLang));
   });
 
   bot.action("menu:new_ticket", async (ctx) => {
     if (!(await answerPrivateOnly(ctx))) return;
+    if (ctx.from) pendingQuestions.delete(ctx.from.id);
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
     await ctx.answerCbQuery();
-    await ctx.editMessageText("Выберите тип обращения.", categoryKeyboard({ back: true }));
+    await ctx.editMessageText(t(uiLang, "chooseCategoryPrompt"), categoryKeyboard({ back: true, lang: uiLang }));
   });
 
   bot.action("menu:faq", async (ctx) => {
     if (!(await answerPrivateOnly(ctx))) return;
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
     await ctx.answerCbQuery();
-    await ctx.editMessageText(faqListText(), faqListKeyboard());
+    await ctx.editMessageText(faqListText(uiLang), faqListKeyboard(uiLang));
+  });
+
+  bot.action("menu:language", async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(t(uiLang, "languagePrompt"), languageKeyboard(uiLang));
+  });
+
+  bot.action(/^language:(ru|en|zh)$/, async (ctx) => {
+    if (!(await answerPrivateOnly(ctx))) return;
+    if (!ctx.from) return;
+    const chosen = callbackData(ctx)?.split(":")[1] as SupportLanguage | undefined;
+    if (!chosen) return;
+    pendingQuestions.delete(ctx.from.id);
+    const repo = new SupportRepository(deps.pool);
+    await repo.upsertUser(telegramUserInput(ctx.from));
+    await repo.setUiLanguageOverride(ctx.from.id, chosen);
+    await ctx.answerCbQuery(t(chosen, "languageChanged"));
+    await ctx.editMessageText(mainMenuText(chosen), mainMenuKeyboard(chosen));
   });
 
   bot.action(/^category:(.+)$/, async (ctx) => {
@@ -689,21 +822,25 @@ export function createBot(deps: BotDeps): Telegraf {
       return;
     }
 
+    pendingQuestions.delete(ctx.from.id);
     const repo = new SupportRepository(deps.pool);
-    await repo.upsertUser(telegramUserInput(ctx.from));
+    const user = await repo.upsertUser(telegramUserInput(ctx.from));
+    const uiLang = uiLanguageFromUser(user.uiLanguageOverride, ctx.from.language_code);
     await repo.setSelectedCategory(ctx.from.id, category);
-    await ctx.answerCbQuery(categoryLabel(category));
-    await ctx.reply(`Тип обращения: ${categoryLabel(category)}. Теперь отправьте первое сообщение.`);
+    await ctx.answerCbQuery(categoryLabel(category, uiLang));
+    await ctx.reply(t(uiLang, "categorySelected", categoryLabel(category, uiLang)));
   });
 
   bot.action("faq:list", async (ctx) => {
     if (!(await answerPrivateOnly(ctx))) return;
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
     await ctx.answerCbQuery();
-    await ctx.editMessageText(faqListText(), faqListKeyboard());
+    await ctx.editMessageText(faqListText(uiLang), faqListKeyboard(uiLang));
   });
 
   bot.action(/^faq:section:(.+)$/, async (ctx) => {
     if (!(await answerPrivateOnly(ctx))) return;
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
     const sectionId = callbackData(ctx)?.split(":")[2];
     const section = sectionId ? findFaqSection(sectionId) : null;
     if (!section) {
@@ -712,18 +849,19 @@ export function createBot(deps: BotDeps): Telegraf {
     }
 
     await ctx.answerCbQuery(section.title);
-    await ctx.editMessageText(formatFaqSection(section), faqSectionKeyboard());
+    await ctx.editMessageText(formatFaqSection(section), faqSectionKeyboard(uiLang));
   });
 
   bot.action("ai:resolved", async (ctx) => {
     if (!(await answerPrivateOnly(ctx))) return;
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
     const pending = ctx.from ? pendingQuestions.get(ctx.from.id) : undefined;
     if (ctx.from) {
       pendingQuestions.delete(ctx.from.id);
     }
-    await ctx.answerCbQuery("Рады помочь!");
+    await ctx.answerCbQuery(t(uiLang, "aiResolved"));
     await ctx.editMessageReplyMarkup(undefined);
-    await ctx.reply("Отлично! Если появится новый вопрос — просто напишите сюда.");
+    await ctx.reply(t(uiLang, "aiResolvedFollowUp"));
     if (ctx.from && pending) {
       const repo = new SupportRepository(deps.pool);
       const user = await repo.findUserByTelegramId(ctx.from.id);
@@ -735,13 +873,14 @@ export function createBot(deps: BotDeps): Telegraf {
 
   bot.action("ai:human", async (ctx) => {
     if (!(await answerPrivateOnly(ctx))) return;
-    await ctx.answerCbQuery("Подключаем оператора…");
+    const uiLang = ctx.from ? await resolveUiLang(deps.pool, ctx.from.id, ctx.from.language_code) : "ru";
+    await ctx.answerCbQuery(t(uiLang, "connectingOperator"));
     await ctx.editMessageReplyMarkup(undefined);
     try {
       await escalateToHuman(ctx, fullDeps);
     } catch (error) {
       deps.logger.error("ai:human escalation failed", { operation: "ai:human", error });
-      await ctx.reply("Не удалось открыть обращение. Попробуйте написать сообщение ещё раз.");
+      await ctx.reply(t(uiLang, "escalationFailed"));
     }
   });
 

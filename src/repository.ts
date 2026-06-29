@@ -1,6 +1,6 @@
 import type { DbClient } from "./db.js";
 import { generateTicketCode } from "./ticketCode.js";
-import type { AiOutcome, ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserStats, UserThreadRecord } from "./types.js";
+import type { AiOutcome, FaqCandidateRecord, FaqCandidateStatus, ServiceTopicKind, SupportMessageDirection, SupportMessageRecord, SupportMessageSenderRole, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserStats, UserThreadRecord } from "./types.js";
 
 function toNumber(value: unknown): number {
   return Number(value);
@@ -14,6 +14,7 @@ function mapUser(row: Record<string, unknown>): UserRecord {
     firstName: row.first_name as string | null,
     lastName: row.last_name as string | null,
     languageCode: row.language_code as string | null,
+    uiLanguageOverride: row.ui_language_override as string | null,
     firstSeenAt: row.first_seen_at as Date,
     lastSeenAt: row.last_seen_at as Date
   };
@@ -39,6 +40,37 @@ function mapTicket(row: Record<string, unknown>): TicketRecord {
     status: row.status as TicketStatus,
     openedAt: row.opened_at as Date,
     closedAt: row.closed_at as Date | null
+  };
+}
+
+function mapSupportMessage(row: Record<string, unknown>): SupportMessageRecord {
+  return {
+    id: toNumber(row.id),
+    ticketId: row.ticket_id === null ? null : toNumber(row.ticket_id),
+    userId: row.user_id === null ? null : toNumber(row.user_id),
+    direction: row.direction as SupportMessageDirection,
+    senderRole: row.sender_role as SupportMessageSenderRole,
+    telegramChatId: row.telegram_chat_id === null ? null : toNumber(row.telegram_chat_id),
+    telegramMessageId: row.telegram_message_id === null ? null : toNumber(row.telegram_message_id),
+    messageThreadId: row.message_thread_id === null ? null : toNumber(row.message_thread_id),
+    text: row.text as string | null,
+    textRedacted: row.text_redacted as string | null,
+    hasText: Boolean(row.has_text),
+    createdAt: row.created_at as Date,
+  };
+}
+
+function mapFaqCandidate(row: Record<string, unknown>): FaqCandidateRecord {
+  return {
+    id: toNumber(row.id),
+    sourceTicketId: row.source_ticket_id === null ? null : toNumber(row.source_ticket_id),
+    question: row.question as string,
+    proposedAnswer: row.proposed_answer as string,
+    evidenceMessageIds: (row.evidence_message_ids as number[] | null) ?? [],
+    status: row.status as FaqCandidateStatus,
+    reviewerNote: row.reviewer_note as string | null,
+    createdAt: row.created_at as Date,
+    reviewedAt: row.reviewed_at as Date | null,
   };
 }
 
@@ -316,5 +348,140 @@ export class SupportRepository {
         input.targetMessageId
       ]
     );
+  }
+
+  async setUiLanguageOverride(telegramUserId: number, lang: string | null): Promise<void> {
+    await this.db.query(
+      "update users set ui_language_override = $2 where telegram_user_id = $1",
+      [telegramUserId, lang]
+    );
+  }
+
+  async getUiLanguageOverride(telegramUserId: number): Promise<string | null> {
+    const result = await this.db.query(
+      "select ui_language_override from users where telegram_user_id = $1",
+      [telegramUserId]
+    );
+    return (result.rows[0]?.ui_language_override as string | undefined) ?? null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Support messages
+  // ---------------------------------------------------------------------------
+
+  async addSupportMessage(input: {
+    ticketId: number | null;
+    userId: number | null;
+    direction: SupportMessageDirection;
+    senderRole: SupportMessageSenderRole;
+    telegramChatId?: number | null;
+    telegramMessageId?: number | null;
+    messageThreadId?: number | null;
+    text?: string | null;
+    textRedacted?: string | null;
+  }): Promise<SupportMessageRecord> {
+    const hasText = typeof input.text === "string" && input.text.length > 0;
+    const result = await this.db.query(
+      `
+        insert into support_messages(
+          ticket_id, user_id, direction, sender_role,
+          telegram_chat_id, telegram_message_id, message_thread_id,
+          text, text_redacted, has_text
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        returning *
+      `,
+      [
+        input.ticketId ?? null,
+        input.userId ?? null,
+        input.direction,
+        input.senderRole,
+        input.telegramChatId ?? null,
+        input.telegramMessageId ?? null,
+        input.messageThreadId ?? null,
+        input.text ?? null,
+        input.textRedacted ?? null,
+        hasText,
+      ]
+    );
+    return mapSupportMessage(result.rows[0]);
+  }
+
+  async listTicketMessages(ticketId: number): Promise<SupportMessageRecord[]> {
+    const result = await this.db.query(
+      "select * from support_messages where ticket_id = $1 order by created_at asc",
+      [ticketId]
+    );
+    return result.rows.map(mapSupportMessage);
+  }
+
+  async listRecentClosedTicketMessages(limit = 50): Promise<SupportMessageRecord[]> {
+    const result = await this.db.query(
+      `
+        select sm.*
+        from support_messages sm
+        join tickets t on t.id = sm.ticket_id
+        where t.status = 'closed'
+        order by sm.created_at desc
+        limit $1
+      `,
+      [limit]
+    );
+    return result.rows.map(mapSupportMessage);
+  }
+
+  // ---------------------------------------------------------------------------
+  // FAQ candidates
+  // ---------------------------------------------------------------------------
+
+  async addFaqCandidate(input: {
+    sourceTicketId: number | null;
+    question: string;
+    proposedAnswer: string;
+    evidenceMessageIds?: number[];
+  }): Promise<FaqCandidateRecord | null> {
+    const result = await this.db.query(
+      `
+        insert into faq_candidates(source_ticket_id, question, proposed_answer, evidence_message_ids)
+        values ($1, $2, $3, $4)
+        on conflict (source_ticket_id, question, proposed_answer)
+        where source_ticket_id is not null
+        do nothing
+        returning *
+      `,
+      [
+        input.sourceTicketId ?? null,
+        input.question,
+        input.proposedAnswer,
+        JSON.stringify(input.evidenceMessageIds ?? []),
+      ]
+    );
+    return result.rows.length > 0 ? mapFaqCandidate(result.rows[0]) : null;
+  }
+
+  async listFaqCandidates(status?: FaqCandidateStatus): Promise<FaqCandidateRecord[]> {
+    if (status) {
+      const result = await this.db.query(
+        "select * from faq_candidates where status = $1 order by created_at desc",
+        [status]
+      );
+      return result.rows.map(mapFaqCandidate);
+    }
+    const result = await this.db.query("select * from faq_candidates order by created_at desc");
+    return result.rows.map(mapFaqCandidate);
+  }
+
+  async updateFaqCandidateStatus(id: number, status: FaqCandidateStatus, reviewerNote?: string): Promise<FaqCandidateRecord | null> {
+    const result = await this.db.query(
+      `
+        update faq_candidates
+        set status = $2,
+            reviewer_note = $3,
+            reviewed_at = now()
+        where id = $1
+        returning *
+      `,
+      [id, status, reviewerNote ?? null]
+    );
+    return result.rows[0] ? mapFaqCandidate(result.rows[0]) : null;
   }
 }

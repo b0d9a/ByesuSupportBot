@@ -1,4 +1,6 @@
 import { Markup } from "telegraf";
+import type { SupportLanguage } from "./botUtils.js";
+import { t } from "./i18n.js";
 
 export interface FaqSection {
   id: string;
@@ -157,23 +159,23 @@ export function findFaqSection(id: string): FaqSection | null {
   return FAQ_SECTIONS.find((section) => section.id === id) ?? null;
 }
 
-export function faqListText(): string {
-  return "Выберите раздел FAQ.";
+export function faqListText(lang: SupportLanguage = "ru"): string {
+  return t(lang, "faqListPrompt");
 }
 
-export function faqListKeyboard() {
+export function faqListKeyboard(lang: SupportLanguage = "ru") {
   return Markup.inlineKeyboard([
     ...FAQ_SECTIONS.map((section) => [
       Markup.button.callback(section.title, `faq:section:${section.id}`)
     ]),
-    [Markup.button.callback("Назад", "menu:start")]
+    [Markup.button.callback(t(lang, "btnBack"), "menu:start")]
   ]);
 }
 
-export function faqSectionKeyboard() {
+export function faqSectionKeyboard(lang: SupportLanguage = "ru") {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("Назад к FAQ", "faq:list")],
-    [Markup.button.callback("Создать обращение", "menu:new_ticket")]
+    [Markup.button.callback(t(lang, "btnBackToFaq"), "faq:list")],
+    [Markup.button.callback(t(lang, "btnNewTicket"), "menu:new_ticket")]
   ]);
 }
 

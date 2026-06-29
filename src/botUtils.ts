@@ -116,9 +116,49 @@ export function isHumanOnlySupportMessage(text: string): boolean {
   return HUMAN_ONLY_SUPPORT_PATTERNS.some((re) => re.test(text));
 }
 
+export type SupportLanguage = "ru" | "en" | "zh";
+
+/**
+ * Detects whether a message is predominantly Russian, English, or Chinese.
+ * Counts Cyrillic, Latin, and CJK Han characters; the majority wins.
+ * Falls back to the explicit fallback (default "ru") when counts are equal or empty.
+ */
+export function detectSupportLanguage(text: string, fallback: SupportLanguage = "ru"): SupportLanguage {
+  let cyr = 0;
+  let lat = 0;
+  let han = 0;
+  for (const ch of text) {
+    const c = ch.toLowerCase();
+    if (c >= "а" && c <= "я" || c === "ё") cyr++;
+    else if (c >= "a" && c <= "z") lat++;
+    else {
+      const cp = ch.codePointAt(0) ?? 0;
+      if ((cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0x3400 && cp <= 0x4dbf) || (cp >= 0x20000 && cp <= 0x2a6df)) han++;
+    }
+  }
+  if (cyr === 0 && lat === 0 && han === 0) return fallback;
+  if (han > cyr && han > lat) return "zh";
+  return lat > cyr ? "en" : "ru";
+}
+
 function truncateField(text: string, budget: number): string {
   if (text.length <= budget) return text;
   return text.slice(0, budget - TRUNCATION_SUFFIX.length) + TRUNCATION_SUFFIX;
+}
+
+export function formatModeratorQuestionMessage(question: string): string {
+  const header = "❓ Вопрос пользователя:\n";
+  return header + truncateField(question, TELEGRAM_MSG_LIMIT - header.length);
+}
+
+export function formatModeratorBotAnswerMessage(botAnswer: string): string {
+  const header = "🤖 Ответ бота:\n";
+  return header + truncateField(botAnswer, TELEGRAM_MSG_LIMIT - header.length);
+}
+
+export function formatModeratorFollowUpMessage(followUp: string): string {
+  const header = "💬 Следующее сообщение пользователя:\n";
+  return header + truncateField(followUp, TELEGRAM_MSG_LIMIT - header.length);
 }
 
 export function formatModeratorEscalationContext(question: string, aiAnswer: string): string {

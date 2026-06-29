@@ -136,17 +136,25 @@ Base URL: https://byesu.com/v1
 - Homebrew: brew install codex
 
 Конфиг (~/.codex/config.toml):
+  model_provider = "OpenAI"
   model = "gpt-5.5"
-  model_provider = "byesu"
-  wire_api = "responses"          ← обязательно, иначе ошибка 404
+  review_model = "gpt-5.5"
+  model_reasoning_effort = "high"
+  disable_response_storage = true
+  network_access = "enabled"
+
+  [model_providers.OpenAI]
+  name = "OpenAI"
   base_url = "https://byesu.com/v1"
-  disable_response_storage = true  ← обязательно для сторонних шлюзов
-  model_reasoning_effort = "medium"  ← опционально: minimal / low / medium / high
+  wire_api = "responses"
+  requires_openai_auth = true
 
 Ключ (~/.codex/auth.json):
-  OPENAI_API_KEY = "ваш sk-токен"
+  {
+    "OPENAI_API_KEY": "sk-your-key"
+  }
 
-Важно: wire_api должен быть "responses" (не "chat"), base_url заканчивается на /v1.
+Важно: wire_api должен быть "responses" (не "chat"). base_url указывается в секции [model_providers.OpenAI], не на верхнем уровне конфига.
 
 ### Claude Code CLI (docs.byesu.com/clients/claude-cli)
 
