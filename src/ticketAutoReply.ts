@@ -41,9 +41,10 @@ export const PROBLEM_401_AUTO_ANSWER = [
 ].join("\n");
 
 const PATTERNS_503 = [
-  /\b503\b/,
+  /\b(502|503)\b/,
   /stream\s+disconnect/i,
   /service\s+unavailable/i,
+  /selected\s+model\s+is\s+at\s+capacity/i,
   /временн\w+\s+(недоступ|перегруз)/i,
   /перегру(зка|жен)/i,
   /сервис\s+недоступ/i,

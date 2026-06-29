@@ -84,12 +84,35 @@ const OFF_TOPIC_PATTERNS: RegExp[] = [
   /какой сейчас (год|день|час)/iu,
 ];
 
+const HUMAN_ONLY_SUPPORT_PATTERNS: RegExp[] = [
+  // Payment/order/account balance issues require operator lookup.
+  /(плат[её]ж|оплат[аиыл]|пополнил|пополнение|деп(озит)?).{0,80}(не\s+(приш[её]л|зачисл|появил)|не\s+получил|висит|не\s+прош[её]л)/iu,
+  /(баланс|деньги|средств[ао]).{0,80}(не\s+(приш[её]л|зачисл|появил)|исчез|обнули|снял|списал|пропал|меньше)/iu,
+  /(промокод|код).{0,60}(не\s+(приш[её]л|подходит|действител)|invalid|недействител)/iu,
+  /\b(txid|transaction\s+hash|hash|usr\d+[a-z0-9]*)\b|0x[a-f0-9]{6,}/iu,
+  /(крипто|usdt|trc20|solscan|bscscan|tronscan).{0,80}(не\s+(приш[её]л|зачисл|прош[её]л)|оплат|пополнил|перев[её]л|txid|hash)/iu,
+  // Cross-site balance transfers and account-specific restoration/compensation.
+  /(перенес|перенести|перевести|перевод).{0,80}(баланс|деньги|средств).{0,80}(стар|нов|site|сайт|byesu)/iu,
+  /(баланс|деньги|средств).{0,80}(стар(ом|ого|ый)\s+сайт|code\.byesu\.com|api\.byesu\.com).{0,80}(перенес|перенести|перевести|перевод)/iu,
+  /(стар(ого|ый)\s+сайт|code\.byesu\.com|api\.byesu\.com).{0,80}(нов(ый|ого)\s+сайт|byesu\.com|баланс|перенос)/iu,
+  /(верните|восстановите|восстановить|компенсируйте|компенсац).{0,80}(баланс|деньги|средств|кредит)/iu,
+  /(реферал|партн[её]р|скидк|лимит|тестов(ый|ого)\s+баланс|тестовые\s+кредиты|аккаунт\s+(chatgpt|claude|max|plus))/iu,
+];
+
 /**
  * Returns true when the message is clearly unrelated to Byesu support.
  * Used as a cheap pre-filter before calling the AI API.
  */
 export function isOffTopicMessage(text: string): boolean {
   return OFF_TOPIC_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Returns true when the message is related to Byesu but requires operator-only
+ * account/order/log lookup, so the AI must not answer it substantively.
+ */
+export function isHumanOnlySupportMessage(text: string): boolean {
+  return HUMAN_ONLY_SUPPORT_PATTERNS.some((re) => re.test(text));
 }
 
 function truncateField(text: string, budget: number): string {
