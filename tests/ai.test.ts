@@ -53,9 +53,37 @@ describe("KNOWLEDGE_BASE", () => {
     expect(KNOWLEDGE_BASE).toContain("403");
     expect(KNOWLEDGE_BASE).toContain("404");
     expect(KNOWLEDGE_BASE).toContain("429");
+    expect(KNOWLEDGE_BASE).toContain("502");
     expect(KNOWLEDGE_BASE).toContain("503");
     expect(KNOWLEDGE_BASE).toContain("no available channels");
     expect(KNOWLEDGE_BASE).toContain("model_not_found");
+    expect(KNOWLEDGE_BASE).toContain("insufficient_quota");
+  });
+
+  it("covers 502 / selected model is at capacity", () => {
+    expect(KNOWLEDGE_BASE).toContain("502");
+    expect(KNOWLEDGE_BASE).toContain("at capacity");
+  });
+
+  it("marks old-site/new-site balance transfer as human-only", () => {
+    expect(KNOWLEDGE_BASE).toContain("старого сайта на новый");
+  });
+
+  it("marks crypto/USDT not credited as human-only", () => {
+    expect(KNOWLEDGE_BASE).toContain("крипто/USDT");
+  });
+
+  it("contains Codex wire_api = responses setting", () => {
+    expect(KNOWLEDGE_BASE).toContain('wire_api = "responses"');
+  });
+
+  it("contains Claude Code base URL without /v1", () => {
+    expect(KNOWLEDGE_BASE).toContain("https://byesu.com (без /v1");
+    expect(KNOWLEDGE_BASE).toContain("Claude Code");
+  });
+
+  it("does not state User-Agent as confirmed cause of 403", () => {
+    expect(KNOWLEDGE_BASE).not.toMatch(/user.?agent.*403|403.*user.?agent/i);
   });
 });
 
