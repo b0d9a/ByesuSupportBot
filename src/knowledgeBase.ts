@@ -139,7 +139,7 @@ Base URL: https://byesu.com/v1
   model_provider = "OpenAI"
   model = "gpt-5.5"
   review_model = "gpt-5.5"
-  model_reasoning_effort = "high"
+  model_reasoning_effort = "medium"
   disable_response_storage = true
   network_access = "enabled"
 

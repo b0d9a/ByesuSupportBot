@@ -22,6 +22,15 @@ describe("Problem ticket — 503 / stream disconnected / capacity", () => {
     "временная перегрузка серверов",
     "сервис недоступен",
     "перегрузка модели",
+    // Added coverage (pending-follow-up improvements)
+    "почему у меня ошибка 502",
+    "ошибка 502",
+    "502 bad gateway",
+    "bad gateway",
+    "модель перегружена",
+    "модель недоступна",
+    "stream disconnected",
+    "503",
   ];
 
   for (const msg of cases503) {
@@ -80,6 +89,12 @@ describe("Problem ticket — 401 / invalid token", () => {
     "недействительный ключ",
     "неверный токен",
     "ключ не работает",
+    // Added coverage (pending-follow-up improvements)
+    "почему у меня 401",
+    "получаю 401",
+    "401 что делать",
+    "unauthorized",
+    "key not accepted",
   ];
 
   for (const msg of cases401) {
@@ -103,6 +118,11 @@ describe("Problem ticket — 401 / invalid token", () => {
 
   it("401 auto-answer stays within Telegram message limit", () => {
     expect(PROBLEM_401_AUTO_ANSWER.length).toBeLessThan(4096);
+  });
+
+  it("does NOT treat '401k' as a 401 auth error (word boundary)", () => {
+    expect(getProblemAutoAnswer("сколько стоит 401k план").matched).toBe(false);
+    expect(getProblemAutoAnswer("my 401k retirement account").matched).toBe(false);
   });
 
   it("insufficient_quota is NOT treated as a 401 auth error — no auto-answer", () => {

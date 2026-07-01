@@ -13,8 +13,9 @@ import { SupportRepository } from "./repository.js";
 import { deleteServiceCardMessage, editForumTopicTitle, ensureThreadAndTicket, moderatorTicketKeyboard, postClosedTicketCard, postOpenTicketCard, refreshOpenServiceCard, refreshPinnedCard } from "./ticketService.js";
 import { ticketNumber } from "./ticketCode.js";
 import type { ServiceTopicKind, TicketStatus, TelegramUserInput, TicketRecord, UserRecord, UserThreadRecord } from "./types.js";
-import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, type SupportLanguage, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, isOffTopicMessage, isHumanOnlySupportMessage, formatModeratorEscalationContext, formatModeratorNewMessageContext, formatModeratorQuestionMessage, formatModeratorBotAnswerMessage, formatModeratorFollowUpMessage, detectSupportLanguage } from "./botUtils.js";
-import { getPaymentAcknowledgment, getProblemAutoAnswer } from "./ticketAutoReply.js";
+import { RATE_LIMIT_MS, RATE_LIMIT_NOTICE_MS, RATE_LIMIT_TTL_MS, PENDING_QUESTION_TTL_MS, type PendingQuestion, type PendingIntent, type SupportLanguage, hasText, isCommandMessage, isRateLimited, shouldSendRateLimitNotice, pruneStalePendingQuestions, isAiAnswerUsable, isHumanRequest, formatModeratorQuestionMessage, formatModeratorBotAnswerMessage, formatModeratorFollowUpMessage, detectSupportLanguage } from "./botUtils.js";
+import { classifySupportIntent, getCodexSetupAnswer, getPaymentAcknowledgment, getProblemAutoAnswer } from "./ticketAutoReply.js";
+import type { CategoryCode } from "./categories.js";
 import { t, uiLanguageFromTelegram, uiLanguageFromUser, LANGUAGE_SELECTOR_PROMPT } from "./i18n.js";
 import { redactSupportText } from "./redaction.js";
 
@@ -199,6 +200,76 @@ async function repairStaleThread(
   return updated;
 }
 
+// Sends a deterministic/AI docs answer to the user (wrapped + resolved/human buttons),
+// stores the pending session with intent, and records both support_messages with
+// ticketId=null. Used by the intent-first routing for problem_401/503, Codex setup,
+// AI docs answers, and same-issue follow-up repeats.
+async function sendDeterministicAnswer(
+  ctx: Context,
+  repo: SupportRepository,
+  userId: number,
+  telegramUserId: number,
+  originalQuestionText: string,
+  answer: string,
+  intent: PendingIntent,
+  userMessageId: number | null,
+  category?: string
+): Promise<void> {
+  const lang = detectSupportLanguage(originalQuestionText);
+  const wrapped = formatSupportBotAnswer(answer, lang);
+  const previous = pendingQuestions.get(telegramUserId);
+  pendingQuestions.set(telegramUserId, { text: originalQuestionText, aiAnswer: answer, at: Date.now(), intent, category: category ?? previous?.category });
+  const replied = await ctx.reply(wrapped, aiAnswerKeyboard(lang));
+  repo.addSupportMessage({ ticketId: null, userId, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: userMessageId, text: originalQuestionText, textRedacted: redactSupportText(originalQuestionText) }).catch(() => {});
+  repo.addSupportMessage({ ticketId: null, userId, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: replied.message_id, text: wrapped, textRedacted: redactSupportText(wrapped) }).catch(() => {});
+}
+
+// Opens a ticket for a pending session and posts the original question, the bot's
+// previous answer, and the new follow-up as three separate moderator messages.
+// Used when a pending follow-up escalates (dissatisfaction, human request, or a
+// different unresolved issue).
+async function escalatePendingWithContext(
+  ctx: Context,
+  deps: RuntimeDeps,
+  repo: SupportRepository,
+  user: UserRecord,
+  telegramUserId: number,
+  uiLang: SupportLanguage,
+  category: string,
+  pending: PendingQuestion,
+  followUpText: string,
+  followUpMessageId: number | null
+): Promise<void> {
+  const { ticket: pendingTicket, thread: pendingThread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, category);
+  const sentQ = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorQuestionMessage(pending.text), {
+    message_thread_id: pendingThread.messageThreadId
+  });
+  await repo.addMessageLink({
+    ticketId: pendingTicket.id,
+    userId: user.id,
+    direction: "user_to_support",
+    sourceChatId: telegramUserId,
+    sourceMessageId: null,
+    targetChatId: deps.config.supportGroupId,
+    targetMessageId: sentQ.message_id
+  });
+  const sentAnswer = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorBotAnswerMessage(pending.aiAnswer), {
+    message_thread_id: pendingThread.messageThreadId
+  });
+  const sentFollowUp = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorFollowUpMessage(followUpText), {
+    message_thread_id: pendingThread.messageThreadId
+  });
+  pendingQuestions.delete(telegramUserId);
+  repo.logAiInteraction(user.id, "escalated", pending.text.length).catch((err) => {
+    deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+  });
+  repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: pending.text, textRedacted: redactSupportText(pending.text) }).catch(() => {});
+  repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", messageThreadId: pendingThread.messageThreadId, telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, text: pending.aiAnswer, textRedacted: redactSupportText(pending.aiAnswer) }).catch(() => {});
+  repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentFollowUp.message_id, messageThreadId: pendingThread.messageThreadId, text: followUpText, textRedacted: redactSupportText(followUpText) }).catch(() => {});
+  void followUpMessageId;
+  await ctx.reply(t(uiLang, "ticketOpenedOperator", ticketNumber(pendingTicket)));
+}
+
 export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Promise<void> {
   if (!ctx.from || !ctx.message || ctx.chat?.type !== "private") {
     return;
@@ -227,94 +298,108 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
     let thread = await repo.findThreadByUserId(user.id);
 
     if (!ticket) {
-      const selectedCategory = await repo.getSelectedCategory(user.telegramUserId);
-      if (!selectedCategory || !isCategoryCode(selectedCategory)) {
-        if (selectedCategory) {
-          await repo.clearSelectedCategory(user.telegramUserId);
+      const rawSelectedCategory = await repo.getSelectedCategory(user.telegramUserId);
+      const selectedCategory: CategoryCode | null =
+        rawSelectedCategory && isCategoryCode(rawSelectedCategory) ? rawSelectedCategory : null;
+      // A stale non-code selection is cleared, but does not by itself block routing.
+      if (rawSelectedCategory && !selectedCategory) {
+        await repo.clearSelectedCategory(user.telegramUserId);
+      }
+
+      // Route by message intent, not by the selected category. The selected
+      // category is only fallback metadata for ticket grouping.
+      const intent = hasText(ctx.message) && !isCommandMessage(ctx.message)
+        ? classifySupportIntent(ctx.message.text)
+        : { kind: "unknown" as const, confidence: "low" as const, suggestedCategory: undefined };
+
+      // ----- Pending session: a bot/AI answer is awaiting a button press -----
+      const existingPending = pendingQuestions.get(telegramUserId);
+      if (existingPending && hasText(ctx.message) && !isCommandMessage(ctx.message)) {
+        const newText = ctx.message.text;
+
+        // A follow-up that names a fresh known deterministic issue should be answered
+        // before escalating — even if it differs from the previous pending intent.
+        // Escalation is reserved for: human-only topics, explicit human requests, or
+        // messages the bot has no deterministic answer for (dissatisfaction/unknown).
+        const isDeterministic =
+          intent.kind === "problem_401" || intent.kind === "problem_503" || intent.kind === "docs_codex_setup";
+
+        if (intent.kind !== "human_only" && !isHumanRequest(newText) && isDeterministic) {
+          if (intent.kind === "problem_401" || intent.kind === "problem_503") {
+            const problem = getProblemAutoAnswer(newText);
+            if (problem.matched) {
+              if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
+              await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, newText, problem.text, problem.intent, ctx.message.message_id, intent.suggestedCategory);
+              return;
+            }
+          } else {
+            // docs_codex_setup
+            const codexAnswer = getCodexSetupAnswer(detectSupportLanguage(newText));
+            if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
+            await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, newText, codexAnswer, "docs_codex_setup", ctx.message.message_id, intent.suggestedCategory);
+            return;
+          }
         }
+
+        // Human-only, explicit human request, dissatisfaction, or an unknown/unresolved
+        // follow-up → escalate with full context (original question + bot answer + follow-up).
+        const escalationCategory = intent.suggestedCategory ?? existingPending.category ?? selectedCategory ?? "other";
+        await escalatePendingWithContext(ctx, deps, repo, user, telegramUserId, uiLang, escalationCategory, existingPending, newText, ctx.message.message_id);
+        return;
+      }
+
+      // ----- Fresh message: intent-first routing -----
+
+      // Human-only intent always wins: never receives an AI/deterministic answer.
+      // Falls through to ticket creation below (with payment acknowledgment).
+      if (intent.kind !== "human_only") {
+        // Deterministic API error intents (401 / 502 / 503) — answer regardless of category.
+        if ((intent.kind === "problem_401" || intent.kind === "problem_503") && hasText(ctx.message)) {
+          const question = ctx.message.text;
+          const problem = getProblemAutoAnswer(question);
+          if (problem.matched) {
+            if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
+            await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, question, problem.text, problem.intent, ctx.message.message_id, intent.suggestedCategory);
+            return;
+          }
+        }
+
+        // Deterministic docs/setup intents (Codex setup) — answer regardless of category.
+        if (intent.kind === "docs_codex_setup" && hasText(ctx.message)) {
+          const question = ctx.message.text;
+          const codexAnswer = getCodexSetupAnswer(detectSupportLanguage(question));
+          if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
+          await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, question, codexAnswer, "docs_codex_setup", ctx.message.message_id, intent.suggestedCategory);
+          return;
+        }
+
+        // AI docs-only answer path. Skipped for commands, off-topic, and human-only messages.
+        if (deps.ai.enabled && hasText(ctx.message) && !isCommandMessage(ctx.message) && intent.kind !== "off_topic") {
+          const question = ctx.message.text;
+          const aiResult = await deps.ai.tryAnswer(question);
+          if (isAiAnswerUsable(aiResult)) {
+            repo.logAiInteraction(user.id, "answered", question.length).catch((err) => {
+              deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+            });
+            await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, question, aiResult.answer, "ai_docs", ctx.message.message_id);
+            return;
+          }
+          // AI was enabled but not confident — log before falling through to ticket.
+          repo.logAiInteraction(user.id, "not_confident", question.length).catch((err) => {
+            deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
+          });
+        }
+      }
+
+      // ----- Ticket creation fallback -----
+      // Category preference: suggested by classifier → selected → ask the user.
+      const ticketCategory = intent.suggestedCategory ?? selectedCategory;
+      if (!ticketCategory) {
         await ctx.reply(mainMenuText(uiLang), mainMenuKeyboard(uiLang));
         return;
       }
 
-      // If a pending bot/AI session exists and the user sends a new message instead of
-      // clicking a button, treat it as implicit escalation to a human.
-      const existingPending = pendingQuestions.get(telegramUserId);
-      if (existingPending && hasText(ctx.message) && !isCommandMessage(ctx.message)) {
-        const newText = ctx.message.text;
-        const { ticket: pendingTicket, thread: pendingThread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
-        // Send question, bot answer, and follow-up as separate messages.
-        const sentQ = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorQuestionMessage(existingPending.text), {
-          message_thread_id: pendingThread.messageThreadId
-        });
-        await repo.addMessageLink({
-          ticketId: pendingTicket.id,
-          userId: user.id,
-          direction: "user_to_support",
-          sourceChatId: telegramUserId,
-          sourceMessageId: null,
-          targetChatId: deps.config.supportGroupId,
-          targetMessageId: sentQ.message_id
-        });
-        const sentAnswer = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorBotAnswerMessage(existingPending.aiAnswer), {
-          message_thread_id: pendingThread.messageThreadId
-        });
-        const sentFollowUp = await deps.bot.telegram.sendMessage(deps.config.supportGroupId, formatModeratorFollowUpMessage(newText), {
-          message_thread_id: pendingThread.messageThreadId
-        });
-        pendingQuestions.delete(telegramUserId);
-        repo.logAiInteraction(user.id, "escalated", existingPending.text.length).catch((err) => {
-          deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
-        });
-        repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: existingPending.text, textRedacted: redactSupportText(existingPending.text) }).catch(() => {});
-        repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", messageThreadId: pendingThread.messageThreadId, telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, text: existingPending.aiAnswer, textRedacted: redactSupportText(existingPending.aiAnswer) }).catch(() => {});
-        repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentFollowUp.message_id, messageThreadId: pendingThread.messageThreadId, text: newText, textRedacted: redactSupportText(newText) }).catch(() => {});
-        await ctx.reply(t(uiLang, "ticketOpenedOperator", ticketNumber(pendingTicket)));
-        return;
-      }
-
-      // Deterministic problem auto-answer: respond first, open ticket only if user asks for human.
-      // Does not call AI provider — uses KB-grounded templates.
-      const problemAutoAnswer = selectedCategory === "problem" && hasText(ctx.message) ? getProblemAutoAnswer(ctx.message.text) : { matched: false as const };
-
-      if (problemAutoAnswer.matched && hasText(ctx.message)) {
-        const question = ctx.message.text;
-        const lang = detectSupportLanguage(question);
-        const wrapped = formatSupportBotAnswer(problemAutoAnswer.text, lang);
-        pendingQuestions.set(telegramUserId, { text: question, aiAnswer: problemAutoAnswer.text, at: Date.now() });
-        const replied = await ctx.reply(wrapped, aiAnswerKeyboard(lang));
-        repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: hasText(ctx.message) ? ctx.message.message_id : null, text: question, textRedacted: redactSupportText(question) }).catch(() => {});
-        repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: replied.message_id, text: wrapped, textRedacted: redactSupportText(wrapped) }).catch(() => {});
-        return;
-      }
-
-      // AI gate: try to answer from the knowledge base before opening a ticket.
-      // Only the very first message of a new conversation reaches here, so the AI
-      // never intercepts an ongoing exchange with a human agent. On any doubt the
-      // assistant returns confident=false and we fall through to escalation.
-      if (deps.ai.enabled && hasText(ctx.message) && !isCommandMessage(ctx.message) && !isOffTopicMessage(ctx.message.text) && !isHumanOnlySupportMessage(ctx.message.text)) {
-        const question = ctx.message.text;
-        const aiResult = await deps.ai.tryAnswer(question);
-        if (isAiAnswerUsable(aiResult)) {
-          const lang = detectSupportLanguage(question);
-          const wrapped = formatSupportBotAnswer(aiResult.answer, lang);
-          // Keep the category selection and remember the question so "talk to a
-          // human" can escalate without asking the user to retype it.
-          pendingQuestions.set(telegramUserId, { text: question, aiAnswer: aiResult.answer, at: Date.now() });
-          repo.logAiInteraction(user.id, "answered", question.length).catch((err) => {
-            deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
-          });
-          const aiReplied = await ctx.reply(wrapped, aiAnswerKeyboard(lang));
-          repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: hasText(ctx.message) ? ctx.message.message_id : null, text: question, textRedacted: redactSupportText(question) }).catch(() => {});
-          repo.addSupportMessage({ ticketId: null, userId: user.id, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: aiReplied.message_id, text: wrapped, textRedacted: redactSupportText(wrapped) }).catch(() => {});
-          return;
-        }
-        // AI was enabled but not confident — log before falling through to human.
-        repo.logAiInteraction(user.id, "not_confident", question.length).catch((err) => {
-          deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
-        });
-      }
-
-      const created = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
+      const created = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, ticketCategory);
       ticket = created.ticket;
       thread = created.thread;
       pendingQuestions.delete(telegramUserId);
@@ -324,7 +409,7 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
       }
       repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "bot_to_user", senderRole: "system", telegramChatId: telegramUserId, telegramMessageId: ticketOpenedReply.message_id, text: t(uiLang, "ticketOpened", ticketNumber(ticket)), textRedacted: t(uiLang, "ticketOpened", ticketNumber(ticket)) }).catch(() => {});
 
-      if (selectedCategory === "payment") {
+      if (ticketCategory === "payment") {
         const lang = hasText(ctx.message) ? detectSupportLanguage(ctx.message.text) : "ru";
         const paymentAckText = getPaymentAcknowledgment(lang);
         const paymentAckReply = await ctx.reply(paymentAckText);

@@ -10,10 +10,17 @@ export const TELEGRAM_MSG_LIMIT = 4096;
 
 const TRUNCATION_SUFFIX = "\n…[обрезано]";
 
+// Intent tag on a pending answer session. Lets a follow-up message that repeats
+// the same known deterministic issue be answered again instead of escalating.
+export type PendingIntent = "problem_401" | "problem_503" | "ai_docs" | "docs_codex_setup";
+
 export interface PendingQuestion {
   text: string;
   aiAnswer: string;
   at: number;
+  intent?: PendingIntent;
+  // Category to prefer if this pending session later escalates to a ticket.
+  category?: string;
 }
 
 export function hasText(message: Message): message is Message.TextMessage {
@@ -114,6 +121,106 @@ export function isOffTopicMessage(text: string): boolean {
  */
 export function isHumanOnlySupportMessage(text: string): boolean {
   return HUMAN_ONLY_SUPPORT_PATTERNS.some((re) => re.test(text));
+}
+
+// Codex (the OpenAI CLI tool) setup/config intent words.
+// Must NOT match error-code messages like "Codex пишет 401" or general coding requests.
+// Note: \b does not work with Cyrillic — use case-insensitive substring match instead.
+const CODEX_TOOL_PATTERNS: RegExp[] = [
+  /codex/iu,
+  /кодекс/iu,
+];
+
+const SETUP_INTENT_PATTERNS: RegExp[] = [
+  /наст(роить|ройк[аеи]|роен)/iu,
+  /подключ(ить|ение|ил)/iu,
+  /конфи(г|ги|гурац)/iu,
+  /\bconfig\b|config\.(toml|json|yaml)/iu,
+  /set\s*up|setup/iu,
+  /connect/iu,
+  /дай\s+(конфиг|настройк|пример)/iu,
+  /как\s+(все|всё)\s+настроить/iu,
+  /не\s+знаю\s+как/iu,
+  // Colloquial RU "make it work / what is needed" intent (Codex mention required separately).
+  /(что|че|чё)\s+(надо|нужно).*(работал|работало|заработал)/iu,
+  /как\s+сделать.*(работал|работало|заработал)/iu,
+  /(не\s+работает).*(наст(роить|роен)|подключ|что\s+(нужно|надо))/iu,
+  /(что\s+(нужно|надо)).*(наст(роить|роен)|подключ)/iu,
+];
+
+// Patterns that disqualify a Codex mention from being a setup question.
+const CODEX_SETUP_DISQUALIFIERS: RegExp[] = [
+  /\b(401|402|403|502|503)\b/,
+  /invalid\s+token/i,
+  /unauthorized/i,
+  /напиши\s+код/iu,
+  /write\s+(code|a\s+(script|function|program))/iu,
+];
+
+/**
+ * Returns true when the message is a Codex CLI setup/configuration question
+ * that is covered by the Byesu knowledge base. Used to short-circuit AI
+ * and give a deterministic KB-grounded answer without opening a ticket.
+ */
+export function isDocsCoveredSetupQuestion(text: string): boolean {
+  if (CODEX_SETUP_DISQUALIFIERS.some((re) => re.test(text))) return false;
+  return CODEX_TOOL_PATTERNS.some((re) => re.test(text)) && SETUP_INTENT_PATTERNS.some((re) => re.test(text));
+}
+
+// Phrases that signal dissatisfaction with the bot answer (the previous answer
+// did not resolve the issue). A follow-up matching these escalates only when it
+// carries no fresh deterministic intent to answer instead.
+const DISSATISFACTION_PATTERNS: RegExp[] = [
+  // RU
+  /не\s+помог(ло|ает|ла)?/iu,
+  /(всё|все)\s+равно\s+(не\s+работает|ошибк|та\s+же)/iu,
+  /после\s+проверки.{0,40}(всё|все)\s+равно/iu,
+  /проверил.{0,40}(та\s+же|всё\s+равно|не\s+помог|ошибк)/iu,
+  /(так|всё)\s+же\s+(самое|ошибк)/iu,
+  /не\s+решил/iu,
+  // EN
+  /still\s+(not\s+working|doesn.?t\s+work|failing|broken|the\s+same)/iu,
+  /(didn.?t|does\s?n.?t|not)\s+help/iu,
+  /i\s+checked.{0,40}(same|still)/iu,
+  /same\s+(error|issue|problem)/iu,
+];
+
+// Phrases that explicitly ask for a human/operator. These outrank a deterministic
+// answer: if the user asks for a human, escalate even when the message also names
+// a known error (e.g. "401 нужен оператор").
+const HUMAN_REQUEST_PATTERNS: RegExp[] = [
+  // RU
+  /нужен\s+(человек|оператор|поддержк)/iu,
+  /(позов|дай|хочу|нужен|свяж).{0,20}(оператор|человек|поддержк)/iu,
+  new RegExp(`${CYR_START}оператор${CYR_END}`, "iu"),
+  new RegExp(`${CYR_START}человек${CYR_END}`, "iu"),
+  // EN
+  /(call|need|talk\s+to|want|get)\s+(a\s+)?(human|operator|agent|support|person)/iu,
+  /\bhuman\b/iu,
+];
+
+/**
+ * Returns true when a follow-up explicitly asks for a human/operator.
+ * Outranks a deterministic answer in the pending-follow-up flow.
+ */
+export function isHumanRequest(text: string): boolean {
+  return HUMAN_REQUEST_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Returns true when a follow-up signals dissatisfaction with the previous answer.
+ */
+export function isDissatisfaction(text: string): boolean {
+  return DISSATISFACTION_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Returns true when a follow-up message signals dissatisfaction with the bot
+ * answer or an explicit request for a human. Such follow-ups must escalate
+ * unless a fresh deterministic intent can be answered instead.
+ */
+export function isEscalationSignal(text: string): boolean {
+  return isDissatisfaction(text) || isHumanRequest(text);
 }
 
 export type SupportLanguage = "ru" | "en" | "zh";

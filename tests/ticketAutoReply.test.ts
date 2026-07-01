@@ -45,6 +45,7 @@ describe("getProblemAutoAnswer — 503 patterns", () => {
       const result = getProblemAutoAnswer(msg);
       expect(result.matched).toBe(true);
       if (result.matched) {
+        expect(result.intent).toBe("problem_503");
         expect(result.text).toBe(get503AutoAnswer(detectSupportLanguage(msg)));
       }
     });
@@ -76,6 +77,7 @@ describe("getProblemAutoAnswer — 401 patterns", () => {
       const result = getProblemAutoAnswer(msg);
       expect(result.matched).toBe(true);
       if (result.matched) {
+        expect(result.intent).toBe("problem_401");
         expect(result.text).toBe(get401AutoAnswer(detectSupportLanguage(msg)));
       }
     });
@@ -130,5 +132,49 @@ describe("getProblemAutoAnswer — 503 takes priority over 401 if both patterns 
     if (result.matched) {
       expect(result.text).toBe(PROBLEM_503_AUTO_ANSWER);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deterministic answers must not imply a ticket/operator already exists.
+// Deterministic 401/502/503 answers are sent BEFORE any ticket is created.
+// ---------------------------------------------------------------------------
+describe("deterministic auto-answers — no misleading 'operator already sees ticket' wording", () => {
+  const allAnswers = [
+    ["401 ru", get401AutoAnswer("ru")],
+    ["401 en", get401AutoAnswer("en")],
+    ["401 zh", get401AutoAnswer("zh")],
+    ["503 ru", get503AutoAnswer("ru")],
+    ["503 en", get503AutoAnswer("en")],
+    ["503 zh", get503AutoAnswer("zh")],
+  ] as const;
+
+  for (const [label, answer] of allAnswers) {
+    it(`${label} does not claim an operator already sees the ticket`, () => {
+      expect(answer).not.toContain("оператор уже видит");
+      expect(answer).not.toContain("видит обращение");
+      expect(answer).not.toContain("оператор ответит здесь");
+      expect(answer).not.toContain("already seen your ticket");
+      expect(answer).not.toContain("will reply here");
+      expect(answer).not.toContain("已看到您的工单");
+      expect(answer).not.toContain("将在此处回复");
+    });
+  }
+
+  it("RU 401/503 point the user to the 'Need a human' button", () => {
+    expect(get401AutoAnswer("ru")).toContain("Если ошибка не исчезает — нажмите «Нужен человек», и мы передадим обращение оператору.");
+    expect(get503AutoAnswer("ru")).toContain("Если ошибка не исчезает — нажмите «Нужен человек», и мы передадим обращение оператору.");
+  });
+
+  it("EN 401/503 point the user to the 'Need a human' button", () => {
+    const expected = "If the error persists, tap “Need a human” and we’ll pass the case to an operator.";
+    expect(get401AutoAnswer("en")).toContain(expected);
+    expect(get503AutoAnswer("en")).toContain(expected);
+  });
+
+  it("ZH 401/503 point the user to the 'Need a human' button", () => {
+    const expected = "如果错误持续，请点击“需要人工”，我们会转交给操作员。";
+    expect(get401AutoAnswer("zh")).toContain(expected);
+    expect(get503AutoAnswer("zh")).toContain(expected);
   });
 });
