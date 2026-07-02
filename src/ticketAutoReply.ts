@@ -226,7 +226,9 @@ const PATTERNS_401 = [
   /key\s+not\s+accepted/i,
   /недействительн/i,
   /ключ\s+не\s+(принят|работает|действ)/i,
-  /неверн/i,
+  // Only treat "неверн(ый/ая/...)" as a 401 when it is in auth/key/token context,
+  // so "неверный пароль/модель/запрос" does not trigger the key-check answer.
+  /неверн[а-яё]*\s+(токен|ключ|api|апи|key)/iu,
   // Chinese: 401 error, invalid token, unauthorized, key not accepted
   /401\s*(错误|无效|未授权)/u,
   /(令牌|token|密钥|key)\s*(无效|错误|未被接受|不正确)/iu,

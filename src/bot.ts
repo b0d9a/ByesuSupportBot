@@ -544,7 +544,7 @@ async function handleSupportTopicMessage(ctx: Context, deps: RuntimeDeps): Promi
   }
 }
 
-async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
+export async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
   if (!ctx.from || ctx.chat?.type !== "private") {
     return;
   }
@@ -562,12 +562,6 @@ async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
     return;
   }
 
-  const selectedCategory = await repo.getSelectedCategory(user.telegramUserId);
-  if (!selectedCategory || !isCategoryCode(selectedCategory)) {
-    await ctx.reply(mainMenuText(uiLang), mainMenuKeyboard(uiLang));
-    return;
-  }
-
   // The original question is kept in pendingQuestions only for the lifetime of
   // this process. If the bot restarted after the AI answered (or the 30-min TTL
   // expired), the entry is gone. In that case we ask the user to resend rather
@@ -578,7 +572,14 @@ async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<void> {
     return;
   }
 
-  const { ticket, thread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, selectedCategory);
+  // The user explicitly asked for a human, so we always open a ticket. Category
+  // is fallback metadata only: prefer the pending session's category, then the
+  // stored selection, then "other" — never dead-end into the main menu here.
+  const rawSelectedCategory = await repo.getSelectedCategory(user.telegramUserId);
+  const selectedCategory = rawSelectedCategory && isCategoryCode(rawSelectedCategory) ? rawSelectedCategory : null;
+  const escalationCategory = pending.category ?? selectedCategory ?? "other";
+
+  const { ticket, thread } = await ensureThreadAndTicket(deps.bot, repo, deps.config, user, escalationCategory);
 
   // Send original question and bot answer as separate messages so moderators
   // can read them independently.

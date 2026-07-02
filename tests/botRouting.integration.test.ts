@@ -14,7 +14,7 @@ import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
 import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 import type { Message } from "telegraf/types";
-import { handlePrivateMessage, pendingQuestions, type RuntimeDeps } from "../src/bot.js";
+import { handlePrivateMessage, escalateToHuman, pendingQuestions, type RuntimeDeps } from "../src/bot.js";
 import {
   PAYMENT_ACKNOWLEDGMENT,
   PROBLEM_503_AUTO_ANSWER,
@@ -26,7 +26,9 @@ import {
   classifySupportIntent,
 } from "../src/ticketAutoReply.js";
 import { detectSupportLanguage, isDocsCoveredSetupQuestion, isEscalationSignal } from "../src/botUtils.js";
-import { uiLanguageFromTelegram, uiLanguageFromUser, LANGUAGE_SELECTOR_PROMPT } from "../src/i18n.js";
+import { uiLanguageFromTelegram, uiLanguageFromUser, LANGUAGE_SELECTOR_PROMPT, t } from "../src/i18n.js";
+import { mainMenuText } from "../src/menu.js";
+import { ticketNumber } from "../src/ticketCode.js";
 import { redactSupportText } from "../src/redaction.js";
 import type { TicketRecord, UserRecord, UserThreadRecord } from "../src/types.js";
 import { AiAssistant } from "../src/ai.js";
@@ -1793,5 +1795,79 @@ describe("Intent-first routing — selectedCategory does not block deterministic
     const botRow = calls.find((c) => c[0].direction === "bot_to_user");
     expect(userRow?.[0].ticketId).toBeNull();
     expect(botRow?.[0].ticketId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite 26 — escalateToHuman (ai:human button) — audit C2
+// ---------------------------------------------------------------------------
+describe("escalateToHuman — 'Need a human' button", () => {
+  it("pending answer + NO selected category → opens ticket with category 'other', no dead-end menu", async () => {
+    const { ctx, replies, userId } = makeCtx("irrelevant");
+    // AI docs answer left a pending session with no category attached.
+    pendingQuestions.set(userId, { text: "как использовать api", aiAnswer: "docs answer", at: Date.now(), intent: "ai_docs" });
+    const { deps, ensureThreadAndTicket } = await buildDeps({ selectedCategory: null });
+    await escalateToHuman(ctx, deps);
+
+    // Ticket is opened with the "other" fallback category — not blocked into the menu.
+    expect(ensureThreadAndTicket).toHaveBeenCalled();
+    const category = (ensureThreadAndTicket.mock.calls[0] as unknown[])[4];
+    expect(category).toBe("other");
+    // No main-menu dead-end reply.
+    expect(replies.join("\n")).not.toContain(mainMenuText("ru"));
+    // Pending cleared after escalation.
+    expect(pendingQuestions.has(userId)).toBe(false);
+  });
+
+  it("pending answer + NO category → support group receives question and bot answer as separate messages", async () => {
+    const { ctx, userId } = makeCtx("irrelevant");
+    pendingQuestions.set(userId, { text: "original question", aiAnswer: "the bot answer", at: Date.now(), intent: "ai_docs" });
+    const { deps } = await buildDeps({ selectedCategory: null });
+    await escalateToHuman(ctx, deps);
+
+    const botSendMsg = (deps.bot.telegram as unknown as { sendMessage: Mock }).sendMessage;
+    // Two separate moderator messages: question, then bot answer.
+    expect(botSendMsg).toHaveBeenCalledTimes(2);
+    const bodies = botSendMsg.mock.calls.map((c) => c[1] as string);
+    expect(bodies[0]).toContain("original question");
+    expect(bodies[1]).toContain("the bot answer");
+  });
+
+  it("pending answer + NO category → stores user and bot support_messages", async () => {
+    const { ctx, userId } = makeCtx("irrelevant");
+    pendingQuestions.set(userId, { text: "original question", aiAnswer: "the bot answer", at: Date.now(), intent: "ai_docs" });
+    const { deps, repo } = await buildDeps({ selectedCategory: null });
+    await escalateToHuman(ctx, deps);
+
+    const calls = repo.addSupportMessage.mock.calls as Array<[{ direction: string; text?: string }]>;
+    expect(calls.some((c) => c[0].direction === "user_to_support" && c[0].text === "original question")).toBe(true);
+    expect(calls.some((c) => c[0].direction === "bot_to_support" && c[0].text === "the bot answer")).toBe(true);
+  });
+
+  it("uses pending.category when present (falls back category order: pending → selected → other)", async () => {
+    const { ctx, userId } = makeCtx("irrelevant");
+    pendingQuestions.set(userId, { text: "q", aiAnswer: "a", at: Date.now(), intent: "problem_401", category: "problem" });
+    const { deps, ensureThreadAndTicket } = await buildDeps({ selectedCategory: null });
+    await escalateToHuman(ctx, deps);
+    const category = (ensureThreadAndTicket.mock.calls[0] as unknown[])[4];
+    expect(category).toBe("problem");
+  });
+
+  it("no pending session → sessionExpired, no ticket opened", async () => {
+    const { ctx, replies, userId } = makeCtx("irrelevant");
+    pendingQuestions.delete(userId);
+    const { deps, ensureThreadAndTicket } = await buildDeps({ selectedCategory: "problem" });
+    await escalateToHuman(ctx, deps);
+    expect(ensureThreadAndTicket).not.toHaveBeenCalled();
+    expect(replies.join("\n")).toContain(t("ru", "sessionExpired"));
+  });
+
+  it("active ticket already open → ticketAlreadyOpen, no new ticket", async () => {
+    const { ctx, replies, userId } = makeCtx("irrelevant");
+    pendingQuestions.set(userId, { text: "q", aiAnswer: "a", at: Date.now(), intent: "ai_docs" });
+    const { deps, ensureThreadAndTicket } = await buildDeps({ activeTicket: MOCK_TICKET, selectedCategory: "problem" });
+    await escalateToHuman(ctx, deps);
+    expect(ensureThreadAndTicket).not.toHaveBeenCalled();
+    expect(replies.join("\n")).toContain(t("ru", "ticketAlreadyOpen", ticketNumber(MOCK_TICKET)));
   });
 });

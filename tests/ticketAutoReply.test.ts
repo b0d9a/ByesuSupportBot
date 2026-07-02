@@ -69,6 +69,8 @@ describe("getProblemAutoAnswer — 401 patterns", () => {
     "ключ не принят",
     "недействительный ключ",
     "неверный токен",
+    "неверный ключ",
+    "неверный api ключ",
     "ключ не работает",
   ];
 
@@ -79,6 +81,27 @@ describe("getProblemAutoAnswer — 401 patterns", () => {
       if (result.matched) {
         expect(result.intent).toBe("problem_401");
         expect(result.text).toBe(get401AutoAnswer(detectSupportLanguage(msg)));
+      }
+    });
+  }
+
+  // Regression (audit C1): broad "неверн" must not trigger the 401 auth answer
+  // outside token/key context.
+  const notAuth401 = [
+    "неверный пароль от аккаунта",
+    "неверная модель в запросе",
+    "у меня неверные настройки",
+    "ошибка неверный запрос 400",
+    "сколько стоит 401k план",
+  ];
+
+  for (const msg of notAuth401) {
+    it(`does NOT treat as 401: "${msg}"`, () => {
+      const result = getProblemAutoAnswer(msg);
+      if (result.matched) {
+        expect(result.intent).not.toBe("problem_401");
+      } else {
+        expect(result.matched).toBe(false);
       }
     });
   }
