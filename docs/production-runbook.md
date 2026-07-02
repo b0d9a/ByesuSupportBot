@@ -49,6 +49,7 @@ See [`.env.example`](../.env.example) for the copy-paste template. Summary:
 | `AI_API_KEY` | Conditionally | — | AI gateway key. **Required when `AI_ENABLED=true`** — the bot fails fast otherwise. |
 | `AI_BASE_URL` | No | `https://byesu.com/v1` | AI gateway base URL. |
 | `AI_MODEL` | No | `gpt-5.5` | AI model name. |
+| `SUPPORT_TEXT_RETENTION_DAYS` | No | `90` | Raw-text retention window for the purge job (`scripts/purge_raw_support_text.ts`). Not read by the bot at runtime. |
 
 ## First deployment
 
@@ -116,6 +117,24 @@ Local dev via docker compose:
 docker compose exec -T postgres psql -U byesu -d byesu_support_dev -c "select status, count(*) from tickets group by status;"
 ```
 
+## Repository / migration integration tests
+
+The repository + schema integration suite (`tests/repository.integration.test.ts`) is **skipped unless `INTEGRATION_TEST_DB_URL` is set**, so the default `npm test` (unit + mocked) stays DB-free. Before a production launch these must run against a **real Postgres at least once**, and they run automatically in the `db-integration` CI job ([.github/workflows/ci.yml](../.github/workflows/ci.yml)).
+
+Local one-time run against a throwaway DB:
+
+```bash
+# 1. Start a disposable Postgres (docker)
+docker run --rm -d --name byesu-itest -e POSTGRES_USER=byesu -e POSTGRES_PASSWORD=byesu -e POSTGRES_DB=byesu_support_test -p 5432:5432 postgres:16
+# 2. Apply migrations, then run the suite with the DB wired in
+DATABASE_URL=postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test npm run migrate
+INTEGRATION_TEST_DB_URL=postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test npm test
+# 3. Tear down
+docker stop byesu-itest
+```
+
+Record the result (all migrations applied cleanly + integration suite green) before launch.
+
 ## Learning pipeline
 
 - `support_messages` stores both raw (`text`) and redacted (`text_redacted`) message text for every user/bot/operator turn.
@@ -132,9 +151,20 @@ See [learning-pipeline.md](learning-pipeline.md) for details on filtering and re
 ## Privacy / data handling
 
 - `support_messages.text` contains **raw user text** and may include PII or secrets (API keys, tokens, emails, transaction hashes, phone numbers).
-- Use **`text_redacted`** for any reporting, screenshots, or sharing.
+- Use **`text_redacted`** for any reporting, screenshots, or sharing. The FAQ candidate generator only ever writes redacted text (it re-redacts on the fly if `text_redacted` is missing).
 - **Do not** paste raw DB exports into external tools, LLMs, or dashboards.
-- **TODO:** define and implement a data retention / purge policy for `support_messages` (currently retained indefinitely).
+
+### Data-retention policy for raw text
+
+Policy: **raw `support_messages.text` is retained for 90 days**, then nulled while keeping `text_redacted` (ticket history and message links are preserved). Adjust the window with `SUPPORT_TEXT_RETENTION_DAYS`.
+
+Run the purge on a schedule (daily cron / Windows Task Scheduler):
+
+```bash
+SUPPORT_TEXT_RETENTION_DAYS=90 npx tsx scripts/purge_raw_support_text.ts
+```
+
+The job is idempotent (it only touches rows that still hold raw text past the window) and never deletes message rows.
 
 ## Rollback
 

@@ -105,6 +105,9 @@ const HUMAN_ONLY_SUPPORT_PATTERNS: RegExp[] = [
   /(стар(ого|ый)\s+сайт|code\.byesu\.com|api\.byesu\.com).{0,80}(нов(ый|ого)\s+сайт|byesu\.com|баланс|перенос)/iu,
   /(верните|восстановите|восстановить|компенсируйте|компенсац).{0,80}(баланс|деньги|средств|кредит)/iu,
   /(реферал|партн[её]р|скидк|лимит|тестов(ый|ого)\s+баланс|тестовые\s+кредиты|аккаунт\s+(chatgpt|claude|max|plus))/iu,
+  // Account / order / log lookups require an operator to look up the specific record.
+  /(провер|посмотр|найд|гля[нь]|уточн)[а-яё]*\s+(мой|моё|мою|наш)?\s*(заказ|платёж|платеж|транзакц|аккаунт|лог|историю\s+платеж)/iu,
+  /(check|look\s*up|find|verify)\s+(my\s+)?(order|payment|transaction|account|log)/iu,
 ];
 
 /**

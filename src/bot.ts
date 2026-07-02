@@ -200,6 +200,21 @@ async function repairStaleThread(
   return updated;
 }
 
+// Fire-and-forget wrapper for support_messages writes: message delivery must not
+// block on the learning-store write, but failures must not be silent either —
+// otherwise a degraded DB silently drops learning data with no signal.
+type AddSupportMessageInput = Parameters<SupportRepository["addSupportMessage"]>[0];
+function recordSupportMessage(repo: SupportRepository, logger: Logger, input: AddSupportMessageInput): void {
+  repo.addSupportMessage(input).catch((error) => {
+    logger.warn("addSupportMessage failed", {
+      operation: "addSupportMessage",
+      direction: input.direction,
+      ticketId: input.ticketId,
+      error
+    });
+  });
+}
+
 // Sends a deterministic/AI docs answer to the user (wrapped + resolved/human buttons),
 // stores the pending session with intent, and records both support_messages with
 // ticketId=null. Used by the intent-first routing for problem_401/503, Codex setup,
@@ -207,6 +222,7 @@ async function repairStaleThread(
 async function sendDeterministicAnswer(
   ctx: Context,
   repo: SupportRepository,
+  logger: Logger,
   userId: number,
   telegramUserId: number,
   originalQuestionText: string,
@@ -220,8 +236,8 @@ async function sendDeterministicAnswer(
   const previous = pendingQuestions.get(telegramUserId);
   pendingQuestions.set(telegramUserId, { text: originalQuestionText, aiAnswer: answer, at: Date.now(), intent, category: category ?? previous?.category });
   const replied = await ctx.reply(wrapped, aiAnswerKeyboard(lang));
-  repo.addSupportMessage({ ticketId: null, userId, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: userMessageId, text: originalQuestionText, textRedacted: redactSupportText(originalQuestionText) }).catch(() => {});
-  repo.addSupportMessage({ ticketId: null, userId, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: replied.message_id, text: wrapped, textRedacted: redactSupportText(wrapped) }).catch(() => {});
+  recordSupportMessage(repo, logger, { ticketId: null, userId, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: userMessageId, text: originalQuestionText, textRedacted: redactSupportText(originalQuestionText) });
+  recordSupportMessage(repo, logger, { ticketId: null, userId, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: replied.message_id, text: wrapped, textRedacted: redactSupportText(wrapped) });
 }
 
 // Opens a ticket for a pending session and posts the original question, the bot's
@@ -263,9 +279,9 @@ async function escalatePendingWithContext(
   repo.logAiInteraction(user.id, "escalated", pending.text.length).catch((err) => {
     deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
   });
-  repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: pending.text, textRedacted: redactSupportText(pending.text) }).catch(() => {});
-  repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", messageThreadId: pendingThread.messageThreadId, telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, text: pending.aiAnswer, textRedacted: redactSupportText(pending.aiAnswer) }).catch(() => {});
-  repo.addSupportMessage({ ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentFollowUp.message_id, messageThreadId: pendingThread.messageThreadId, text: followUpText, textRedacted: redactSupportText(followUpText) }).catch(() => {});
+  recordSupportMessage(repo, deps.logger, { ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: pending.text, textRedacted: redactSupportText(pending.text) });
+  recordSupportMessage(repo, deps.logger, { ticketId: pendingTicket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", messageThreadId: pendingThread.messageThreadId, telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, text: pending.aiAnswer, textRedacted: redactSupportText(pending.aiAnswer) });
+  recordSupportMessage(repo, deps.logger, { ticketId: pendingTicket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentFollowUp.message_id, messageThreadId: pendingThread.messageThreadId, text: followUpText, textRedacted: redactSupportText(followUpText) });
   void followUpMessageId;
   await ctx.reply(t(uiLang, "ticketOpenedOperator", ticketNumber(pendingTicket)));
 }
@@ -329,14 +345,14 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
             const problem = getProblemAutoAnswer(newText);
             if (problem.matched) {
               if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
-              await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, newText, problem.text, problem.intent, ctx.message.message_id, intent.suggestedCategory);
+              await sendDeterministicAnswer(ctx, repo, deps.logger, user.id, telegramUserId, newText, problem.text, problem.intent, ctx.message.message_id, intent.suggestedCategory);
               return;
             }
           } else {
             // docs_codex_setup
             const codexAnswer = getCodexSetupAnswer(detectSupportLanguage(newText));
             if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
-            await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, newText, codexAnswer, "docs_codex_setup", ctx.message.message_id, intent.suggestedCategory);
+            await sendDeterministicAnswer(ctx, repo, deps.logger, user.id, telegramUserId, newText, codexAnswer, "docs_codex_setup", ctx.message.message_id, intent.suggestedCategory);
             return;
           }
         }
@@ -359,7 +375,7 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
           const problem = getProblemAutoAnswer(question);
           if (problem.matched) {
             if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
-            await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, question, problem.text, problem.intent, ctx.message.message_id, intent.suggestedCategory);
+            await sendDeterministicAnswer(ctx, repo, deps.logger, user.id, telegramUserId, question, problem.text, problem.intent, ctx.message.message_id, intent.suggestedCategory);
             return;
           }
         }
@@ -369,7 +385,7 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
           const question = ctx.message.text;
           const codexAnswer = getCodexSetupAnswer(detectSupportLanguage(question));
           if (intent.suggestedCategory) await repo.setSelectedCategory(telegramUserId, intent.suggestedCategory);
-          await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, question, codexAnswer, "docs_codex_setup", ctx.message.message_id, intent.suggestedCategory);
+          await sendDeterministicAnswer(ctx, repo, deps.logger, user.id, telegramUserId, question, codexAnswer, "docs_codex_setup", ctx.message.message_id, intent.suggestedCategory);
           return;
         }
 
@@ -381,7 +397,7 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
             repo.logAiInteraction(user.id, "answered", question.length).catch((err) => {
               deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
             });
-            await sendDeterministicAnswer(ctx, repo, user.id, telegramUserId, question, aiResult.answer, "ai_docs", ctx.message.message_id);
+            await sendDeterministicAnswer(ctx, repo, deps.logger, user.id, telegramUserId, question, aiResult.answer, "ai_docs", ctx.message.message_id);
             return;
           }
           // AI was enabled but not confident — log before falling through to ticket.
@@ -405,15 +421,15 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
       pendingQuestions.delete(telegramUserId);
       const ticketOpenedReply = await ctx.reply(t(uiLang, "ticketOpened", ticketNumber(ticket)));
       if (hasText(ctx.message)) {
-        repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: ctx.message.message_id, text: ctx.message.text, textRedacted: redactSupportText(ctx.message.text) }).catch(() => {});
+        recordSupportMessage(repo, deps.logger, { ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, telegramMessageId: ctx.message.message_id, text: ctx.message.text, textRedacted: redactSupportText(ctx.message.text) });
       }
-      repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "bot_to_user", senderRole: "system", telegramChatId: telegramUserId, telegramMessageId: ticketOpenedReply.message_id, text: t(uiLang, "ticketOpened", ticketNumber(ticket)), textRedacted: t(uiLang, "ticketOpened", ticketNumber(ticket)) }).catch(() => {});
+      recordSupportMessage(repo, deps.logger, { ticketId: ticket.id, userId: user.id, direction: "bot_to_user", senderRole: "system", telegramChatId: telegramUserId, telegramMessageId: ticketOpenedReply.message_id, text: t(uiLang, "ticketOpened", ticketNumber(ticket)), textRedacted: t(uiLang, "ticketOpened", ticketNumber(ticket)) });
 
       if (ticketCategory === "payment") {
         const lang = hasText(ctx.message) ? detectSupportLanguage(ctx.message.text) : "ru";
         const paymentAckText = getPaymentAcknowledgment(lang);
         const paymentAckReply = await ctx.reply(paymentAckText);
-        repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: paymentAckReply.message_id, text: paymentAckText, textRedacted: paymentAckText }).catch(() => {});
+        recordSupportMessage(repo, deps.logger, { ticketId: ticket.id, userId: user.id, direction: "bot_to_user", senderRole: "bot", telegramChatId: telegramUserId, telegramMessageId: paymentAckReply.message_id, text: paymentAckText, textRedacted: paymentAckText });
       }
     }
 
@@ -454,7 +470,7 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
       targetMessageId: copied.message_id
     });
     if (hasText(ctx.message)) {
-      repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: ctx.chat.id, telegramMessageId: ctx.message.message_id, messageThreadId: activeThread.messageThreadId, text: ctx.message.text, textRedacted: redactSupportText(ctx.message.text) }).catch(() => {});
+      recordSupportMessage(repo, deps.logger, { ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: ctx.chat.id, telegramMessageId: ctx.message.message_id, messageThreadId: activeThread.messageThreadId, text: ctx.message.text, textRedacted: redactSupportText(ctx.message.text) });
     }
   } catch (error) {
     deps.logger.error("handlePrivateMessage failed", {
@@ -470,7 +486,7 @@ export async function handlePrivateMessage(ctx: Context, deps: RuntimeDeps): Pro
   }
 }
 
-async function handleSupportTopicMessage(ctx: Context, deps: RuntimeDeps): Promise<void> {
+export async function handleSupportTopicMessage(ctx: Context, deps: RuntimeDeps): Promise<void> {
   if (!ctx.message || !ctx.from || !ctx.chat || ctx.chat.id !== deps.config.supportGroupId) {
     return;
   }
@@ -516,7 +532,7 @@ async function handleSupportTopicMessage(ctx: Context, deps: RuntimeDeps): Promi
     });
     const opText = "text" in ctx.message ? (ctx.message as { text?: string }).text ?? null : null;
     if (opText) {
-      repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "support_to_user", senderRole: "operator", telegramChatId: deps.config.supportGroupId, telegramMessageId: ctx.message.message_id, messageThreadId, text: opText, textRedacted: redactSupportText(opText) }).catch(() => {});
+      recordSupportMessage(repo, deps.logger, { ticketId: ticket.id, userId: user.id, direction: "support_to_user", senderRole: "operator", telegramChatId: deps.config.supportGroupId, telegramMessageId: ctx.message.message_id, messageThreadId, text: opText, textRedacted: redactSupportText(opText) });
     }
   } catch (error) {
     const isBotBlocked =
@@ -601,8 +617,8 @@ export async function escalateToHuman(ctx: Context, deps: RuntimeDeps): Promise<
   repo.logAiInteraction(user.id, "escalated", pending.text.length).catch((err) => {
     deps.logger.warn("Failed to log AI interaction", { operation: "logAiInteraction", error: err });
   });
-  repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: pending.text, textRedacted: redactSupportText(pending.text) }).catch(() => {});
-  repo.addSupportMessage({ ticketId: ticket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, messageThreadId: thread.messageThreadId, text: pending.aiAnswer, textRedacted: redactSupportText(pending.aiAnswer) }).catch(() => {});
+  recordSupportMessage(repo, deps.logger, { ticketId: ticket.id, userId: user.id, direction: "user_to_support", senderRole: "user", telegramChatId: telegramUserId, text: pending.text, textRedacted: redactSupportText(pending.text) });
+  recordSupportMessage(repo, deps.logger, { ticketId: ticket.id, userId: user.id, direction: "bot_to_support", senderRole: "bot", telegramChatId: deps.config.supportGroupId, telegramMessageId: sentAnswer.message_id, messageThreadId: thread.messageThreadId, text: pending.aiAnswer, textRedacted: redactSupportText(pending.aiAnswer) });
   pendingQuestions.delete(telegramUserId);
 
   await ctx.reply(t(uiLang, "ticketOpenedOperator", ticketNumber(ticket)));

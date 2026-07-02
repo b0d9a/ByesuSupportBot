@@ -6,7 +6,12 @@ node_modules/
 dist/
 logs/
 tmp/
-scripts/
+# Ignore ad-hoc scripts (Python/mjs data-analysis tools that may touch sensitive
+# dumps), but track the TypeScript source scripts that are part of the app /
+# learning pipeline. Use scripts/* (not scripts/) so negations below can re-include.
+scripts/*
+!scripts/generate_faq_candidates.ts
+!scripts/purge_raw_support_text.ts
 ChatExport_*/
 
 *.dump
