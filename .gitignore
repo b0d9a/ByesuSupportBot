@@ -10,6 +10,13 @@ tmp/
 # Internal analyses derived from real support chats / production DB dumps.
 # These contain user data and must never be published. Keep them out of Git.
 reports/
+
+# Internal FAQ working documents. faq-draft.md is sourced from a real community-chat
+# analysis and is explicitly marked "do not publish" until reviewed; faq-needs-answers.md
+# is internal product-planning material (unpublished questions, draft SLA notes).
+# The public-facing FAQ content lives in docs/faq-public.md and src/faq.ts instead.
+docs/faq-draft.md
+docs/faq-needs-answers.md
 # Ignore ad-hoc scripts (Python/mjs data-analysis tools that may touch sensitive
 # dumps), but track the TypeScript source scripts that are part of the app /
 # learning pipeline. Use scripts/* (not scripts/) so negations below can re-include.

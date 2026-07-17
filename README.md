@@ -1,5 +1,8 @@
 # Byesu Support Bot
 
+[![CI](https://github.com/b0d9a/byesusupportbot/actions/workflows/ci.yml/badge.svg)](https://github.com/b0d9a/byesusupportbot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A Telegram support bot that routes user messages **by intent** into per-user forum topics inside a
 moderator supergroup, backed by PostgreSQL. It answers common questions deterministically or from a
 curated knowledge base (via an optional OpenAI-compatible AI provider), and escalates everything else
@@ -28,6 +31,19 @@ to human operators.
   before storage, plus a retention job that purges raw text after a configurable window.
 - **Localization** (Russian, English, Chinese) for bot-facing UI and answers.
 - **Single-instance safety** via a PostgreSQL advisory lock.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Telegram user] -->|DM| B[Bot]
+    B -->|deterministic / KB answer| U
+    B -->|AI docs query| AI[Optional AI gateway<br/>OpenAI-compatible]
+    AI -->|answer or not-confident| B
+    B <-->|read / write tickets,<br/>messages, FAQ candidates| DB[(PostgreSQL)]
+    B -->|open ticket, relay message| M[Moderator forum topics<br/>support supergroup]
+    M -->|operator reply| B
+```
 
 ## Prerequisites
 
@@ -111,11 +127,25 @@ npm run build       # compile TypeScript to dist/
 Repository/schema integration tests are **skipped unless `INTEGRATION_TEST_DB_URL` is set**, so the
 default `npm test` needs no database. To run them against a real Postgres:
 
+**macOS / Linux (bash/zsh):**
+
 ```bash
 docker run --rm -d --name byesu-itest -e POSTGRES_USER=byesu -e POSTGRES_PASSWORD=byesu \
   -e POSTGRES_DB=byesu_support_test -p 5432:5432 postgres:16
 DATABASE_URL=postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test npm run migrate
 INTEGRATION_TEST_DB_URL=postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test npm test
+docker stop byesu-itest
+```
+
+**Windows (PowerShell):**
+
+```powershell
+docker run --rm -d --name byesu-itest -e POSTGRES_USER=byesu -e POSTGRES_PASSWORD=byesu `
+  -e POSTGRES_DB=byesu_support_test -p 5432:5432 postgres:16
+$env:DATABASE_URL = "postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test"
+npm run migrate
+$env:INTEGRATION_TEST_DB_URL = "postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test"
+npm test
 docker stop byesu-itest
 ```
 

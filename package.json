@@ -1,9 +1,20 @@
 {
   "name": "byesu-support-bot",
   "version": "0.1.0",
+  "description": "Telegram support bot that routes messages by intent into moderator forum topics, with deterministic and AI-assisted knowledge-base answers backed by PostgreSQL.",
   "private": true,
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/b0d9a/byesusupportbot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/b0d9a/byesusupportbot/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",

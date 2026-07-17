@@ -27,11 +27,22 @@ Check that the bot process is running:
 Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'dist/index.js' } | Select-Object ProcessId, CommandLine
 ```
 
+```bash
+# macOS / Linux equivalent
+ps aux | grep '[d]ist/index.js'
+```
+
 Check recent logs:
 
 ```powershell
 Get-Content logs\bot-out.log -Tail 50
 Get-Content logs\bot-error.log -Tail 80
+```
+
+```bash
+# macOS / Linux equivalent
+tail -n 50 logs/bot-out.log
+tail -n 80 logs/bot-error.log
 ```
 
 ## First-run language onboarding

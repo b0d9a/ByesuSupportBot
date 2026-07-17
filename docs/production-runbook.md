@@ -123,12 +123,28 @@ The repository + schema integration suite (`tests/repository.integration.test.ts
 
 Local one-time run against a throwaway DB:
 
+**macOS / Linux (bash/zsh):**
+
 ```bash
 # 1. Start a disposable Postgres (docker)
 docker run --rm -d --name byesu-itest -e POSTGRES_USER=byesu -e POSTGRES_PASSWORD=byesu -e POSTGRES_DB=byesu_support_test -p 5432:5432 postgres:16
 # 2. Apply migrations, then run the suite with the DB wired in
 DATABASE_URL=postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test npm run migrate
 INTEGRATION_TEST_DB_URL=postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test npm test
+# 3. Tear down
+docker stop byesu-itest
+```
+
+**Windows (PowerShell):**
+
+```powershell
+# 1. Start a disposable Postgres (docker)
+docker run --rm -d --name byesu-itest -e POSTGRES_USER=byesu -e POSTGRES_PASSWORD=byesu -e POSTGRES_DB=byesu_support_test -p 5432:5432 postgres:16
+# 2. Apply migrations, then run the suite with the DB wired in
+$env:DATABASE_URL = "postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test"
+npm run migrate
+$env:INTEGRATION_TEST_DB_URL = "postgresql://byesu:byesu@127.0.0.1:5432/byesu_support_test"
+npm test
 # 3. Tear down
 docker stop byesu-itest
 ```
@@ -160,8 +176,17 @@ Policy: **raw `support_messages.text` is retained for 90 days**, then nulled whi
 
 Run the purge on a schedule (daily cron / Windows Task Scheduler):
 
+**macOS / Linux (bash/zsh):**
+
 ```bash
 SUPPORT_TEXT_RETENTION_DAYS=90 npx tsx scripts/purge_raw_support_text.ts
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$env:SUPPORT_TEXT_RETENTION_DAYS = "90"
+npx tsx scripts/purge_raw_support_text.ts
 ```
 
 The job is idempotent (it only touches rows that still hold raw text past the window) and never deletes message rows.

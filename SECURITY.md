@@ -5,8 +5,9 @@
 Please report security vulnerabilities **privately**. Do not open a public GitHub issue for security
 problems.
 
-- Email: **security@byesu.com** *(replace with your real security contact)*
-- Alternatively, use GitHub's **[private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)** (Security → Report a vulnerability).
+Use GitHub's **[private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)**:
+go to the repository's **Security** tab → **Report a vulnerability**. This opens a private draft advisory
+visible only to maintainers until it is resolved.
 
 Please include:
 
